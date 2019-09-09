@@ -2,66 +2,37 @@ package cli
 
 import "flag"
 
+// Parse parses and validates the command line args
 func Parse() (*Args, error) {
 	var args Args
-	args.Parse()
-	args.Validate()
-	return args
+	args.parse()
+	err := args.validate()
+	return &args, err
 }
 
+// Args is the full set of available command line args
 type Args struct {
-	Install *installOpts
 	Global  *globalOpts
+	Install *installOpts
+	Dirs    *pathsOpts
 	Ayum    *ayumOpts
 	CVMFS   *cvmfsOpts
 }
 
-func (a *Args) flags() {
-	a.Global.flags()
-	a.Install.flags()
-	a.CVMFS.flags()
-	a.Ayum.flags()
+func (a *Args) parse() {
 	flag.Parse()
 }
 
-func (a *Args) Validate() {
-
+// flags defines all the flags for this struct
+func (a *Args) flags() {
+	a.Global.flags()
+	a.Install.flags()
+	a.Dirs.flags()
+	a.CVMFS.flags()
+	a.Ayum.flags()
 }
 
-type cvmfsOpts struct {
-	// Name of the nightly repo
-	NightlyRepo string
-
-	// Path where we store fixed number software releases
-	StableRepoDir string
-
-	// Gateway Machine to access CVMFS
-	GatewayNode string
-
-	// How many times we try to open our own CVMFS transaction
-	MaxTransitionAttempts int
-}
-
-func (c *cvmfsOpts) flags() {
-	flag.StringVar(&c.NightlyRepo)
-}
-
-func (c *cvmfsOpts) validate() {
-	//
-}
-
-type installOpts struct {
-	Release   string
-	Branch    string
-	Platform  string
-	Timestamp string
-	Project   string
-}
-
-type ayumOpts struct {
-	Repo            string
-	GitCloneTimeOut int
-}
-type globalOpts struct {
-	TimeOut int
+// Validate validates the parsed args
+func (a *Args) validate() error {
+	return nil
 }

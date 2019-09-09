@@ -24,14 +24,24 @@ type Package struct {
 	Version string
 }
 
+// Opts configures the ayum instance
+type Opts struct {
+	Repo            string
+	Dir             string
+	GitCloneTimeout int
+}
+
 // New creates a new Ayum instance
-func New(srcRepo, localdir string, log logging.Logger) *Ayum {
-	return &Ayum{
-		SrcRepo: srcRepo,
-		Dir:     localdir,
-		Binary:  filepath.Join(localdir, "ayum/ayum"),
+func New(log logging.Logger, opts *Opts) *Ayum {
+	// func New(srcRepo, localdir string, log logging.Logger) *Ayum {
+	a := &Ayum{
+		SrcRepo: opts.Repo,
+		Dir:     opts.Dir,
 		Log:     log,
 	}
+
+	a.Binary = filepath.Join(a.Dir, "ayum/ayum")
+	return a
 }
 
 // Ayum is the ayum wrapper

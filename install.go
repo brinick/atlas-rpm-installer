@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/brinick/atlas-rpm-installer/config"
 	"github.com/brinick/atlas-rpm-installer/pkg/fs"
 	"github.com/brinick/atlas-rpm-installer/pkg/rpm"
 	"github.com/brinick/logging"
@@ -31,7 +30,9 @@ type rpmFinder interface {
 // New returns an installer that can perform an install.
 // The type of the installer returned depends on the file
 // system of the target install directory (CVMFS, AFS, ...).
-func New(args *Args, log logging.Logger, t fs.Transactioner, ay ayumer, finder rpmFinder) (*Installer, error) {
+func New(
+	args *Args, log logging.Logger, t fs.Transactioner, ay ayumer, finder rpmFinder,
+) (*Installer, error) {
 	return &Installer{
 		branch:      args.Branch,
 		platform:    args.Platform,
@@ -107,8 +108,7 @@ func (inst *Installer) exec(ctx context.Context) error {
 		}
 
 		// Download and configure ayum
-		timeout := time.Duration(config.Ayum.GitCloneTimeout) * time.Second
-		inst.ayum.Download(ctx, timeout)
+		inst.ayum.Download(ctx)
 		inst.ayum.PreConfigure(inst.installdir)
 		inst.ayum.AddRemoteRepos(inst.getRemoteRepos())
 		inst.ayum.Configure(inst.installdir)

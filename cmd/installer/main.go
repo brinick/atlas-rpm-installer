@@ -9,7 +9,8 @@ import (
 
 	installer "github.com/brinick/atlas-rpm-installer"
 	"github.com/brinick/atlas-rpm-installer/cli"
-	"github.com/brinick/atlas-rpm-installer/config"
+
+	// "github.com/brinick/atlas-rpm-installer/config"
 	"github.com/brinick/atlas-rpm-installer/pkg/ayum"
 	"github.com/brinick/atlas-rpm-installer/pkg/fs"
 	"github.com/brinick/atlas-rpm-installer/pkg/rpm"
@@ -43,16 +44,17 @@ func main() {
 
 	// Choose the appropriate filesystem transactioner
 	// based on the installdir path prefix.
-	fsTransactioner := fs.Select(args.Paths.InstallDir)
+	fsTransactioner := fs.Select(args.Dirs.Install)
 
 	// Make a specific logger for ayum  - sending to logfile
 	ayumlog := logging.NewClient("logrus")
 	ayumlog.Configure(&logging.Config{
-		Outfile: filepath.Join(config.Paths.Logs, fmt.Sprintf("%s.ayum.log", args.ID())),
+		Outfile: filepath.Join(args.Dirs.Logs, fmt.Sprintf("%s.ayum.log", args.ID())),
 	})
-	ayumer := ayum.New(args.Ayum.Repo, args.Installdir, ayumlog)
+	// ayumer := ayum.New(args.Ayum.Repo, args.Dirs.Install, ayumlog)
+	ayumer := ayum.New(ayumlog, args.Ayum)
 
-	rpmFinder := rpm.Finder{args.RPMSrcBaseDir}
+	rpmFinder := rpm.Finder{args.Paths.RPMSrcBase}
 
 	inst, err := installer.New(&args, mainlog, fsTransactioner, ayumer, rpmFinder)
 	if err != nil {
