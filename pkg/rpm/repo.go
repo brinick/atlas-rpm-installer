@@ -68,7 +68,6 @@ func (f *Finder) Find(project, platform string) ([]*RPM, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	topRPM, err := New(path)
 	if topRPM.Size == 0 {
 		return nil, fmt.Errorf("Top RPM has zero size: %s", path)
@@ -111,6 +110,10 @@ func New(path string) (*RPM, error) {
 // RPMs is a collection of RPM instances
 type RPMs []*RPM
 
+func (r *RPMs) Named() {
+
+}
+
 // Paths returns the paths to each of the RPM instances
 func (r *RPMs) Paths() []string {
 	var paths []string
@@ -125,7 +128,7 @@ func (r *RPMs) Paths() []string {
 func (r *RPMs) Names() []string {
 	var names []string
 	for _, rpm := range *r {
-		names = append(names, filepath.Base(rpm.Path))
+		names = append(names, rpm.Name())
 	}
 
 	return names
@@ -137,6 +140,11 @@ func (r *RPMs) Names() []string {
 type RPM struct {
 	Path string
 	Size int64
+}
+
+// Name returns the name of the RPM
+func (r *RPM) Name() string {
+	return filepath.Base(r.Path)
 }
 
 // LocalDependencies finds only those dependencies
@@ -165,6 +173,8 @@ func (r *RPM) LocalDependencies() ([]*RPM, error) {
 
 	return localdeps, nil
 }
+
+// --------------------------------------------------------------------
 
 // listDeps is a helper function to get the names of
 // dependencies of a given starting root RPM
