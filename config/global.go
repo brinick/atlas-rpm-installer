@@ -1,13 +1,17 @@
 package config
 
-import "flag"
+import (
+	"flag"
+	"fmt"
+	"strings"
+)
 
-type globalOpts struct {
-	TimeOut     int
-	EmailOnFail []string
+// GlobalOpts are options for the global installation context
+type GlobalOpts struct {
+	TimeOut int
 }
 
-func (g *globalOpts) flags() {
+func (g *GlobalOpts) flags() {
 	flag.IntVar(
 		&g.TimeOut,
 		"global.timeout",
@@ -16,6 +20,16 @@ func (g *globalOpts) flags() {
 	)
 }
 
-func (g *globalOpts) validate() error {
+func (g *GlobalOpts) validate() error {
 	return nil
+}
+
+func (g *GlobalOpts) String() string {
+	return strings.Join(
+		[]string{
+			"- Global Options:",
+			fmt.Sprintf("   - Time out: %ds", g.TimeOut),
+		},
+		"\n",
+	)
 }

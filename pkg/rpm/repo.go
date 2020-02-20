@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	rpm "github.com/cavaliercoder/go-rpm"
-	"github.com/pkg/errors"
 )
 
 // Repos is a collection of RPM repo instances
@@ -41,16 +40,30 @@ func (r *Repo) String() string {
 
 // ---------------------------------------------------------------------
 
-// Finder is the RPM locator thingy
-type Finder struct {
-	Basedir string
+// NewFinder creates a new RPM Finder object
+func NewFinder(path string) *Finder {
+	return &Finder{
+		basedir: path,
+	}
 }
 
-func (f *Finder) findTopRPM(project, platform string) (string, error) {
-	// Find the top RPM which we need to install (with its dependencies)
+// Finder is the object that locates RPMs below a given base directory
+type Finder struct {
+	basedir string
+}
+
+// SrcDir returns the path to the root directory below which RPMs are found
+func (f *Finder) SrcDir() string {
+	return f.basedir
+}
+
+type pathGlob func(string) ([]string, error)
+
+// findTopRPM finds the top RPM which we need to install (with its dependencies)
+func (f *Finder) findTopRPM(glob pathGlob, project, platform string) (string, error) {
 	fname := fmt.Sprintf("%s_*_%s.rpm", project, platform)
-	fpath := filepath.Join(f.Basedir, fname)
-	matches, err := filepath.Glob(fpath)
+	fpath := filepath.Join(f.basedir, fname)
+	matches, err := glob(fpath)
 	if err != nil {
 		return "", err
 	}
@@ -63,8 +76,8 @@ func (f *Finder) findTopRPM(project, platform string) (string, error) {
 }
 
 // Find is the method that finds RPMs
-func (f *Finder) Find(project, platform string) ([]*RPM, error) {
-	path, err := f.findTopRPM(project, platform)
+func (f *Finder) Find(project, platform string) (*RPMs, error) {
+	path, err := f.findTopRPM(filepath.Glob, project, platform)
 	if err != nil {
 		return nil, err
 	}
@@ -79,27 +92,28 @@ func (f *Finder) Find(project, platform string) ([]*RPM, error) {
 	}
 
 	// Ensure that no dependencies have zero size, else fail
-	var zero []string
-	for _, dep := range deps {
-		if dep.Size == 0 {
-			zero = append(zero, filepath.Base(dep.Path))
-		}
-	}
-
+	zero := deps.ZeroSize()
 	if len(zero) > 0 {
-		return nil, fmt.Errorf("rpm dependencies in %s found with zero size: %s", path, strings.Join(zero, ", "))
+		err = fmt.Errorf(
+			"rpm dependencies in %s found with zero size: %s",
+			path,
+			strings.Join(zero, ", "),
+		)
+		return nil, err
 	}
 
-	return append([]*RPM{topRPM}, deps...), nil
+	// Prepend the topRPM
+	allRPMs := RPMs(append([]*RPM{topRPM}, *deps...))
+	return &allRPMs, nil
 }
 
 // ---------------------------------------------------------------------
 
-// New creates an RPM instance for the RPM at path
+// New creates an RPM instance for the RPM at the given path
 func New(path string) (*RPM, error) {
 	size, err := fileSize(path)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to get rpm file size")
+		return nil, fmt.Errorf("failed to get rpm file size (%w)", err)
 	}
 
 	return &RPM{Path: path, Size: size}, nil
@@ -110,8 +124,16 @@ func New(path string) (*RPM, error) {
 // RPMs is a collection of RPM instances
 type RPMs []*RPM
 
-func (r *RPMs) Named() {
+// ZeroSize returns the list of those RPMs that are empty length
+func (r *RPMs) ZeroSize() []string {
+	var zero []string
+	for _, rr := range *r {
+		if rr.Size == 0 {
+			zero = append(zero, filepath.Base(rr.Path))
+		}
+	}
 
+	return zero
 }
 
 // Paths returns the paths to each of the RPM instances
@@ -149,7 +171,7 @@ func (r *RPM) Name() string {
 
 // LocalDependencies finds only those dependencies
 // that are in the same directory as the RPM
-func (r *RPM) LocalDependencies() ([]*RPM, error) {
+func (r *RPM) LocalDependencies() (*RPMs, error) {
 	deps, err := listDeps(r.Path)
 	if err != nil {
 		return nil, err
@@ -165,13 +187,14 @@ func (r *RPM) LocalDependencies() ([]*RPM, error) {
 		depPath := filepath.Join(filepath.Dir(r.Path), dep)
 		fi, err := os.Stat(depPath)
 		if err != nil {
-			return nil, errors.Wrapf(err, "cannot get file size for dependency %s", depPath)
+			return nil, fmt.Errorf("cannot get file size for dependency %s (%w)", depPath, err)
 		}
 		depSize := fi.Size()
 		localdeps = append(localdeps, &RPM{depPath, depSize})
 	}
 
-	return localdeps, nil
+	rpmsList := RPMs(localdeps)
+	return &rpmsList, nil
 }
 
 // --------------------------------------------------------------------
@@ -213,7 +236,7 @@ func listDir(dir string, filenames []string) ([]string, error) {
 }
 
 func toLUT(items []string) map[string]struct{} {
-	var m map[string]struct{}
+	var m = map[string]struct{}{}
 	for _, item := range items {
 		m[item] = struct{}{}
 	}

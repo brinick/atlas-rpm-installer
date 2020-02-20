@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // New creates a new Config instance
@@ -17,19 +18,31 @@ func New() (*Config, error) {
 
 // Config is the full set of available command line args
 type Config struct {
-	Admin   *adminOpts
-	Ayum    *ayumOpts
-	CVMFS   *cvmfsOpts
-	Dirs    *dirsOpts
-	EOS     *eosOpts
-	Global  *globalOpts
-	Install *installOpts
+	Admin   *AdminOpts
+	Ayum    *AyumOpts
+	CVMFS   *CvmfsOpts
+	Dirs    *DirsOpts
+	EOS     *EosOpts
+	Global  *GlobalOpts
+	Install *InstallOpts
+	Logging *LoggingOpts
 }
 
-// Dump returns the config as a string representation
-func (c *Config) Dump() string {
-	// TODO: write this
-	return ""
+// String returns the config as a string representation
+func (c *Config) String() string {
+	return strings.Join(
+		[]string{
+			fmt.Sprintf("%s", c.Global),
+			fmt.Sprintf("%s", c.Admin),
+			fmt.Sprintf("%s", c.Ayum),
+			fmt.Sprintf("%s", c.CVMFS),
+			fmt.Sprintf("%s", c.Dirs),
+			fmt.Sprintf("%s", c.EOS),
+			fmt.Sprintf("%s", c.Install),
+			fmt.Sprintf("%s", c.Logging),
+		},
+		"\n",
+	)
 }
 
 // parse parses and validates the command line,
@@ -42,16 +55,17 @@ func (c *Config) parse() error {
 
 // instantiate initialises the config member structs
 func (c *Config) instantiate() {
-	c.Admin = &adminOpts{}
-	c.Ayum = &ayumOpts{}
-	c.CVMFS = &cvmfsOpts{}
-	c.Dirs = &dirsOpts{}
-	c.EOS = &eosOpts{}
-	c.Global = &globalOpts{}
-	c.Install = &installOpts{}
+	c.Admin = &AdminOpts{}
+	c.Ayum = &AyumOpts{}
+	c.CVMFS = &CvmfsOpts{}
+	c.Dirs = &DirsOpts{}
+	c.EOS = &EosOpts{}
+	c.Global = &GlobalOpts{}
+	c.Install = &InstallOpts{}
+	c.Logging = &LoggingOpts{}
 }
 
-// flags defines the CLI flags for this config
+// flags defines the CLI flags for this configuration
 func (c *Config) flags() {
 	c.Admin.flags()
 	c.Ayum.flags()
@@ -60,6 +74,7 @@ func (c *Config) flags() {
 	c.EOS.flags()
 	c.Global.flags()
 	c.Install.flags()
+	c.Logging.flags()
 }
 
 // postConfig adapts some variables that depend on others
@@ -85,7 +100,7 @@ func (c *Config) postConfig() error {
 		return err
 	}
 
-	// Logs dir should sit in the work base directory,
+	// The logs directory should sit in the work base directory,
 	// so we ensure that here
 	c.Dirs.Logs = filepath.Join(c.Dirs.WorkBase, "logs")
 	return nil

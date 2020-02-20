@@ -9,12 +9,25 @@ import (
 	installer "github.com/brinick/atlas-rpm-installer"
 )
 
-type installOpts struct {
+// InstallOpts are options relating to the software to install
+type InstallOpts struct {
 	installer.Opts
 	Release string
 }
 
-func (i *installOpts) flags() {
+func (i *InstallOpts) String() string {
+	return strings.Join(
+		[]string{
+			"- Install Options:",
+			fmt.Sprintf("   - Release: %s", i.Release),
+			fmt.Sprintf("   - Project: %s", i.Project),
+			fmt.Sprintf("   - Tags file: %s", i.TagsFile),
+		},
+		"\n",
+	)
+}
+
+func (i *InstallOpts) flags() {
 	flag.StringVar(&i.Release, "release", "", "The release to install")
 	flag.StringVar(&i.Project, "project", "", "The project to install")
 
@@ -26,7 +39,7 @@ func (i *installOpts) flags() {
 	)
 }
 
-func (i *installOpts) validate() error {
+func (i *InstallOpts) validate() error {
 	tokens := strings.Split(i.Release, "/")
 	if len(tokens) != 3 {
 		msg := "-r argument expected of the form:\n"
@@ -46,7 +59,7 @@ func (i *installOpts) validate() error {
 	return nil
 }
 
-func (i *installOpts) validatePlatform() error {
+func (i *InstallOpts) validatePlatform() error {
 	toks := strings.Split(i.Platform, "-")
 	if len(toks) != 4 {
 		return fmt.Errorf("Badly formed platform '%s'", i.Platform)
@@ -83,7 +96,7 @@ func (i *installOpts) validatePlatform() error {
 	return nil
 }
 
-func (i *installOpts) validateTimestamp() error {
+func (i *InstallOpts) validateTimestamp() error {
 	stamp, err := time.Parse("2006-01-02T1504", i.Timestamp)
 	if err != nil {
 		return fmt.Errorf(

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/brinick/logging"
 	"github.com/brinick/shell"
@@ -14,50 +13,39 @@ type lister interface {
 	Installed(context.Context) (*localPackages, error)
 }
 
-func listCommand(ayumExe string) string {
-	return fmt.Sprintf("%s -q list installed", ayumExe)
-}
-
 type cmdList struct {
-	cmd     []string
-	timeout int
-	log     logging.Logger
+	log    logging.Logger
+	runner ayumCmdRunner
 }
 
 // Installed returns the list of locally installed packages.
 // If none are found, an empty slice is returned. If an error occurs,
 // the package list is nil.
 func (c *cmdList) Installed(ctx context.Context) (*localPackages, error) {
-	ac := ayumCommand{
-		cmd: c.cmd,
-		opts: []shell.Option{
-			shell.Context(ctx),
-			shell.Timeout(time.Duration(c.timeout) * time.Second),
-		},
-	}
-
-	ac.run()
-
-	if !ac.result.IsError() {
-		packages := c.parseInstalled(ac.result.Stdout().Text())
+	var err error
+	if err = c.runner.Run(shell.Context(ctx)); err == nil {
+		packages := c.parseInstalled(c.runner.Result().Stdout().Text())
 		return packages, nil
 	}
 
-	if ac.result.Stdout().Text() == ac.result.Stderr().Text() {
+	stdout := c.runner.Result().Stdout()
+	stderr := c.runner.Result().Stderr()
+
+	if stdout.Text() == stderr.Text() {
 		c.log.Info("No locally installed packages")
 		return &localPackages{}, nil
 	}
 
 	c.log.Error(
 		"Unable to retrieve locally installed package list",
-		logging.F("err", ac.result.Error()),
+		logging.F("err", c.runner.Result().Error()),
 	)
 
-	for _, line := range ac.result.Stderr().Lines() {
+	for _, line := range stderr.Lines() {
 		c.log.Error(line)
 	}
 
-	for _, line := range ac.result.Stdout().Lines() {
+	for _, line := range stdout.Lines() {
 		c.log.Error(line)
 	}
 
@@ -101,7 +89,7 @@ type localPackages []*localPackage
 
 func (lp *localPackages) matching(rpmNames ...string) ([]string, []string) {
 	// Put the names in a map for quick look up
-	var d map[string]bool
+	var d = map[string]bool{}
 	for _, rpm := range rpmNames {
 		d[rpm] = true
 	}

@@ -2,9 +2,10 @@ package cvmfs
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
+
+	"github.com/brinick/atlas-rpm-installer/pkg/filesystem"
 )
 
 // Opts configures the CVMFS transaction
@@ -33,85 +34,55 @@ var (
 	ErrTooManyAttempts = fmt.Errorf("Too many attempts made to open transaction")
 )
 
-// New will create a transaction object and call
+// NewTransaction will create a transaction object and call
 // its open() method. The transaction Close() method should
 // be deferred immediately after calling this, assuming
 // no error was returned.
-func New(opts *Opts) *Transaction {
-	return &Transaction{
+func NewTransaction(opts *Opts) *Transaction {
+	t := Transaction{
 		Repo:     opts.NightlyRepo,
 		Binary:   opts.Binary,
 		Node:     opts.GatewayNode,
 		attempts: opts.MaxTransactionAttempts,
 	}
+
+	t.Transaction.Starter = &t
+	t.Transaction.Stopper = &t
+	return &t
 }
 
 // Transaction represents a CVMFS transaction
 type Transaction struct {
+	filesystem.Transaction
 	Binary   string
 	Repo     string
 	Node     string
 	attempts int
-	ongoing  bool
 }
 
-// Open will create a new transaction. If one
-// is already ongoing on this node, it will return
-// an error
-func (t *Transaction) Open(ctx context.Context) error {
-	if t.ongoing {
-		return nil
-	}
+// Attempts provides the number of tries allowed for opening the transaction
+func (t *Transaction) Attempts() int {
+	return t.attempts
+}
 
-	var err error
-
-	for t.attempts > 0 {
-		err = shellWithContext(ctx, t.Binary, "transaction", t.Repo)
-
-		// We break and return if no error returned (transaction opened ok),
-		// or the error is a context cancel/deadline related one. Any other error
-		// implies trying again to open the transaction.
-		if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			break
-		}
-
-		t.attempts--
-	}
-
+// Start will open a new transaction. If one is already ongoing on
+// this node, it will return an error
+func (t *Transaction) Start(ctx context.Context) error {
 	// TODO: log output?
-	return err
+	return shellWithContext(ctx, t.Binary, "transaction", t.Repo)
 }
 
-// Close will exit the transaction after publishing
-func (t *Transaction) Close(ctx context.Context) error {
-	if !t.ongoing {
-		return nil
-	}
+// Stop will exit the transaction after publishing
+func (t *Transaction) Stop(ctx context.Context) error {
+	err := shellWithContext(ctx, t.Binary, "publish", t.Repo)
 
-	var err error
-
-	attempts := 3
-	for attempts > 0 {
-		// TODO: can publish take a legitimately long time?
-		err := shellWithContext(ctx, t.Binary, "publish", t.Repo)
-		if err == nil {
-			break
-		}
-
-		attempts--
-	}
-
-	// TODO: nested catalog
+	// TODO: Create the nested catalog
 
 	return err
 }
 
-// Abort will halt the ongoing transaction forcefully
+// Kill will halt the ongoing transaction forcefully
 // exiting without publishing
-func (t *Transaction) Abort() error {
-	if !t.ongoing {
-		return nil
-	}
-
-	return shellWithContext(context.TODO(), t.Binary, "abort", "-f", t.Repo)
+func (t *Transaction) Kill(ctx context.Context) error {
+	return shellWithContext(ctx, t.Binary, "abort", "-f", t.Repo)
 }

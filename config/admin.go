@@ -6,13 +6,16 @@ import (
 	"strings"
 )
 
-type adminOpts struct {
+// AdminOpts are options for certain meta variables
+type AdminOpts struct {
 	Email         string
 	DontSendEmail bool
 	SudoUser      string
+	Monitor       bool
 }
 
-func (o *adminOpts) flags() {
+func (o *AdminOpts) flags() {
+	// TODO: should this be in cvmfs opts?
 	flag.StringVar(
 		&o.SudoUser,
 		"admin.sudo-user",
@@ -20,10 +23,18 @@ func (o *adminOpts) flags() {
 		"The name of the sudo user to install nightlies on CVMFS",
 	)
 
+	flag.BoolVar(
+		&o.Monitor,
+		"admin.monitor",
+		false,
+		"Expose expvar monitoring variables",
+	)
+
 	flag.StringVar(
 		&o.Email,
 		"admin.email",
 		strings.Join([]string{
+			// TODO: push this into a separate input
 			"oana.boeriu@cern.ch",
 			"brinick.simmons@cern.ch",
 		}, ","),
@@ -38,7 +49,7 @@ func (o *adminOpts) flags() {
 	)
 }
 
-func (o *adminOpts) validate() error {
+func (o *AdminOpts) validate() error {
 	emails := strings.Split(o.Email, ",")
 	for _, email := range emails {
 		// Very basic check
@@ -48,4 +59,15 @@ func (o *adminOpts) validate() error {
 	}
 
 	return nil
+}
+
+func (o *AdminOpts) String() string {
+	args := []string{
+		"- Admin Options:",
+		fmt.Sprintf("   - Sudo user = %s", o.SudoUser),
+		fmt.Sprintf("   - Email recipients = %s", o.Email),
+		fmt.Sprintf("   - Send email on failure: %t", !o.DontSendEmail),
+	}
+
+	return strings.Join(args, "\n")
 }

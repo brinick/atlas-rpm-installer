@@ -2,15 +2,18 @@ package config
 
 import (
 	"flag"
+	"fmt"
+	"strings"
 
 	"github.com/brinick/atlas-rpm-installer/pkg/ayum"
 )
 
-type ayumOpts struct {
+// AyumOpts are options for ayum
+type AyumOpts struct {
 	ayum.Opts
 }
 
-func (a *ayumOpts) flags() {
+func (a *AyumOpts) flags() {
 	flag.StringVar(
 		&a.AyumDir,
 		"ayum.dir",
@@ -54,6 +57,21 @@ func (a *ayumOpts) flags() {
 	)
 }
 
-func (a *ayumOpts) validate() error {
+func (a *AyumOpts) validate() error {
 	return nil
+}
+
+func (a *AyumOpts) String() string {
+	return strings.Join(
+		[]string{
+			"- Ayum Options:",
+			fmt.Sprintf("   - Src Repo: %s", a.SrcRepo),
+			fmt.Sprintf("   - Ayum Dir: %s", a.AyumDir),
+			fmt.Sprintf("   - Install Dir: %s", a.InstallDir),
+			fmt.Sprintf("   - Download TimeOut: %ds", a.DownloadTimeout),
+			fmt.Sprintf("   - Command TimeOut: %ds", a.Timeout),
+			fmt.Sprintf("   - Install TimeOut: %ds", a.InstallTimeout),
+		},
+		"\n",
+	)
 }

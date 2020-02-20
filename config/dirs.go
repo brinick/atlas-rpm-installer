@@ -2,11 +2,14 @@ package config
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-type dirsOpts struct {
+// DirsOpts are options for various directories
+type DirsOpts struct {
 	// Base directory below which to install
 	InstallBase string
 	Logs        string
@@ -17,7 +20,7 @@ type dirsOpts struct {
 	StableRelsDir string
 }
 
-func (d *dirsOpts) flags() {
+func (d *DirsOpts) flags() {
 	flag.StringVar(
 		&d.InstallBase,
 		"dirs.install",
@@ -54,6 +57,20 @@ func (d *dirsOpts) flags() {
 	)
 }
 
-func (d *dirsOpts) validate() error {
+func (d *DirsOpts) validate() error {
 	return nil
+}
+
+func (d *DirsOpts) String() string {
+	return strings.Join(
+		[]string{
+			"- Directories Options:",
+			fmt.Sprintf("   - Install base: %s", d.InstallBase),
+			fmt.Sprintf("   - Work base: %s", d.WorkBase),
+			fmt.Sprintf("   - Logs dir: %s", d.Logs),
+			fmt.Sprintf("   - RPM src base: %s", d.RPMSrcBase),
+			fmt.Sprintf("   - Stable releases dir: %s", d.StableRelsDir),
+		},
+		"\n",
+	)
 }

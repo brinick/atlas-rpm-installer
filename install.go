@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,22 +18,62 @@ import (
 
 // TODO: are we consistent with setting the Installer err field?
 
+/*
 var (
 	ErrTransactionClose = fmt.Errorf("failed to close transaction")
 )
+*/
 
-type ayumer interface {
+// ----------------------------------------------------------------------
+// - Interfaces to decouple dependencies for injection
+// ----------------------------------------------------------------------
+
+type downloader interface {
 	Download(context.Context) error
+}
+type configurer interface {
 	PreConfigure(string) error
 	Configure(context.Context) error
-	AddRemoteRepos([]*rpm.Repo) error
+}
+
+type cleaner interface {
 	CleanAll(context.Context, string) error
+}
+
+type installer interface {
 	Install(context.Context, ...string) error
+}
+
+type rpmRepoAdder interface {
+	AddRemoteRepos([]*rpm.Repo) error
+}
+
+type ayumer interface {
+	downloader
+	configurer
+	rpmRepoAdder
+	cleaner
+	installer
+}
+
+type rpmRepoer interface {
+	Filename() string
+	String() string
 }
 
 type rpmFinder interface {
 	Find(string, string) (*rpm.RPMs, error)
+	SrcDir() string
 }
+
+type tagsFiler interface {
+	Src() string
+	Remove(...string) error
+	Append(*tagsfile.Entries) error
+	Save() error
+}
+
+// --------------------------------------------------------------------
 
 // Opts configures the Installer
 type Opts struct {
@@ -69,14 +108,17 @@ func (o *Opts) String() string {
 	}, "__")
 }
 
+// ---------------------------------------------------------------------
+
 // New returns an installer that can perform an install.
-func New(opts *Opts, t filesystem.Transactioner, ay ayumer, finder rpmFinder, log logging.Logger) *Installer {
+func New(opts *Opts, t filesystem.Transactioner, ay ayumer, finder rpmFinder, tags tagsFiler, log logging.Logger) *Installer {
 	return &Installer{
 		opts:        opts,
 		log:         log,
 		transaction: t,
 		ayum:        ay,
 		rpms:        finder,
+		tags:        tags,
 		doneChan:    make(chan struct{}),
 		err:         &Errors{},
 	}
@@ -109,6 +151,7 @@ type Installer struct {
 	ayum        ayumer
 	rpms        rpmFinder
 	log         logging.Logger
+	tags        tagsFiler
 	aborted     bool
 	doneChan    chan struct{}
 	err         *Errors
@@ -193,35 +236,35 @@ func (inst *Installer) getRPMsList() ([]*rpm.RPMs, error) {
 	}
 
 	var offline, hlt rpm.RPMs
+	foundOffline := false
+
 	for _, r := range *rpms {
-		// TODO: finish this
 		if strings.HasPrefix(r.Name(), "AtlasHLT") {
 			hlt = rpm.RPMs{r}
-		} else {
-			offline = rpm.RPMs{r}
+			continue
 		}
 
+		offline = rpm.RPMs{r}
+		foundOffline = foundOffline || strings.HasPrefix(r.Name(), "AtlasOffline")
 	}
 
-	list := []*rpm.RPMs{&offline, &hlt}
+	var list []*rpm.RPMs
+	if foundOffline && hlt != nil {
+		list = []*rpm.RPMs{&offline, &hlt}
+	} else {
+		list = []*rpm.RPMs{rpms}
+	}
+
 	return list, nil
 }
 
 func (inst *Installer) doInstall(ctx context.Context) error {
-	defer func() {
-		if r := recover(); r != nil {
-			inst.log.Error("Recovered from panic", logging.F("err", r))
-		}
-
-		inst.setDone()
-	}()
-
 	rpmsList, err := inst.getRPMsList()
 	if err != nil {
 		return err
 	}
 
-	if err := inst.ayumPrepare(ctx); err != nil {
+	if err := inst.configure(ctx); err != nil {
 		return err
 	}
 
@@ -251,77 +294,49 @@ func (inst *Installer) installRPMs(ctx context.Context, rpms *rpm.RPMs) error {
 	inst.cleanDirs()
 	inst.ayum.CleanAll(ctx, "atlas-offline-nightly")
 
-	writeTagsFile(inst.opts.TagsFile)
+	return inst.writeTagsFile()
 }
 
-func (inst *Installer) writeTagsFile(ignore []string) error {
-	// Push out a new tags file (local copy) that has no bad entries
-	src, err := os.Open(inst.opts.TagsFile)
+func (inst *Installer) writeTagsFile() error {
+	nightlyDir := fs.Dir(inst.opts.InstallBaseDir, inst.opts.Branch, inst.opts.Timestamp)
+	projectDirs, err := nightlyDir.SubDirs()
 	if err != nil {
-		return fmt.Errorf(
-			"unable to open tags file for reading %s (%w)",
-			inst.opts.TagsFile,
-			err,
-		)
-	}
-	defer src.Close()
-
-	tmpFile := filepath.Join(os.Getenv("HOME"), "AMItags")
-	tmp, err := os.OpenFile(tmpFile, os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return fmt.Errorf(
-			"failed to open temp tags file for writing %s (%w)",
-			tmpFile,
-			err,
-		)
+		return fmt.Errorf("failed to list sub-dirs of %s (%w)", nightlyDir.Path, err)
 	}
 
-	defer tmp.Close()
-
-	if err = copyLines(src, tmp, lineReject(ignore)); err != nil {
-		return err
-	}
-
-	dir := fs.Dir(
-		inst.opts.InstallBaseDir,
-		inst.opts.Branch,
-		inst.opts.Timestamp,
-	)
-
-	projdir := dir.Append(inst.opts.Project)
-	subdirs, err := projdir.SubDirs()
+	projdir := nightlyDir.Append(inst.opts.Project)
+	projSubdirs, err := projdir.SubDirs()
 	if err != nil {
 		return fmt.Errorf("failed to list sub-dirs of %s (%w)", projdir.Path, err)
 	}
 
-	if len(*subdirs) != 1 {
+	if len(*projSubdirs) != 1 {
 		return fmt.Errorf(
 			"expected project dir (%s) to contain a single subdir, found %d",
 			projdir.Path,
-			len(*subdirs),
+			len(*projSubdirs),
 		)
 	}
 
-	baseRelease := subdirs.Names()[0]
+	nextRelease := projSubdirs.Names()[0]
 
-	// TODO: push these into a configurable step
-	entries := dir.Entries().Not(".cvmfscatalog*", "*.ayum.log")
-	var lines []string
-	for _, entry := range *entries {
-		tfe := tagsfile.Entry{
-			Label:    "VO-atlas-nightly",
-			Branch:   inst.opts.Branch,
-			Datetime: inst.opts.Timestamp,
-			Project:  inst.opts.Project,
-			BaseRel:  baseRelease,
-			Platform: inst.opts.Platform,
-		}
-
-		lines = append(lines, tfe.String())
+	var entries *tagsfile.Entries
+	for _, project := range *projectDirs {
+		entries.Add(
+			&tagsfile.Entry{
+				Label:    "VO-atlas-nightly",
+				Branch:   inst.opts.Branch,
+				Datetime: inst.opts.Timestamp,
+				Project:  project.Name(),
+				NextRel:  nextRelease,
+				Platform: inst.opts.Platform,
+			},
+		)
 	}
 
-	// output the file
-	return writeLines(tmp, lines)
+	inst.tags.Remove(".cvmfscatalog", ".ayum.log")
+	inst.tags.Append(entries)
+	return inst.tags.Save()
 }
 
 // cleanDirs removes certain install directories, post install
@@ -340,8 +355,9 @@ func (inst *Installer) cleanDirs() error {
 	return fs.Dirs(toDelete...).Remove()
 }
 
-// ayumPrepare downloads ayum and configures it, ready for installing RPMs
-func (inst *Installer) ayumPrepare(ctx context.Context) error {
+// configure readies the installer for installing RPMs,
+// by downloading ayum and configuring it.
+func (inst *Installer) configure(ctx context.Context) error {
 	var err error
 	if err = inst.ayum.Download(ctx); err != nil {
 		return err

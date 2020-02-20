@@ -2,8 +2,6 @@ package ayum
 
 import (
 	"context"
-	"fmt"
-	"time"
 
 	"github.com/brinick/shell"
 )
@@ -13,34 +11,14 @@ type cleaner interface {
 }
 
 type cmdClean struct {
-	ayumExe  string
-	preCmds  []string
-	postCmds []string
-	timeout  int
+	timeout int
+	runner  ayumCmdRunner
 }
 
 // CleanAll runs an ayum clean all on the given repository
 func (c *cmdClean) CleanAll(ctx context.Context, repoName string) error {
-	cmd := append(
-		c.preCmds,
-		append(
-			[]string{
-				fmt.Sprintf("%s --enablerepo=%s clean all", c.ayumExe, repoName),
-			},
-			c.postCmds...,
-		)...,
-	)
-
-	ac := ayumCommand{
-		cmd: cmd,
-		opts: []shell.Option{
-			shell.Context(ctx),
-			shell.Timeout(time.Duration(c.timeout) * time.Second),
-		},
-	}
-
-	ac.run()
+	err := c.runner.Run(shell.Context(ctx))
 
 	// TODO: check error and log messages, return correctly
-	return nil
+	return err
 }

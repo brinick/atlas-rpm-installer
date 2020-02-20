@@ -3,15 +3,46 @@ package ayum
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/brinick/shell"
 )
 
+type ayumCmdRunner interface {
+	Command() string
+	SetCommand(string)
+	Run(...shell.Option) error
+	Result() *shell.Result
+}
+
 type ayumCommand struct {
-	label  string
-	cmd    []string
-	opts   []shell.Option
-	result *shell.Result
+	label    string
+	preCmds  []string
+	cmd      string
+	postCmds []string
+	timeout  int
+	result   *shell.Result
+}
+
+func (ac *ayumCommand) Run(opts ...shell.Option) error {
+	if ac.timeout > 0 {
+		opts = append(opts, shell.Timeout(time.Duration(ac.timeout)*time.Second))
+	}
+	ac.result = shell.Run(ac.command(), opts...)
+	return ac.result.Error()
+}
+
+// Result retrieves the Result object after running the command
+func (ac *ayumCommand) Result() *shell.Result {
+	return ac.result
+}
+
+func (ac *ayumCommand) Command() string {
+	return ac.cmd
+}
+
+func (ac *ayumCommand) SetCommand(c string) {
+	ac.cmd = c
 }
 
 func (ac *ayumCommand) outcome() string {
@@ -39,13 +70,15 @@ func (ac *ayumCommand) duration() float64 {
 	return ac.result.Duration()
 }
 
-func (ac *ayumCommand) run() {
-	ac.result = shell.Run(strings.Join(ac.cmd, ";"), ac.opts...)
-}
-
-// Result retrieves the Result object after running the command
-func (ac *ayumCommand) Result() *shell.Result {
-	return ac.result
+func (ac *ayumCommand) command() string {
+	return strings.Join(
+		[]string{
+			strings.Join(ac.preCmds, ";"),
+			ac.cmd,
+			strings.Join(ac.postCmds, ";"),
+		},
+		";",
+	)
 }
 
 // ayumEnv returns the commands to execute prior to any ayum commands,
@@ -55,17 +88,5 @@ func ayumEnv(ayumdir string) []string {
 		fmt.Sprintf("cd %s", ayumdir),
 		"shopt -s expand_aliases",
 		"source ayum/setup.sh",
-	}
-}
-
-func wrapCommand(preCmds []string, postCmds []string) func(string) []string {
-	return func(cmd string) []string {
-		return append(
-			preCmds,
-			append(
-				[]string{cmd},
-				postCmds...,
-			)...,
-		)
 	}
 }

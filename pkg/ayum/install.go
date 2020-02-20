@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/brinick/logging"
 	"github.com/brinick/shell"
@@ -17,11 +16,9 @@ type installer interface {
 
 type cmdInstall struct {
 	lister
-	ayumExe  string
-	preCmds  []string
-	postCmds []string
-	timeout  int
-	log      logging.Logger
+	rpmInstaller   ayumCmdRunner
+	rpmReinstaller ayumCmdRunner
+	log            logging.Logger
 }
 
 // Install will install the provided RPMs. Firstly, establish if
@@ -33,12 +30,19 @@ func (c *cmdInstall) Install(ctx context.Context, rpmsToInstall ...string) error
 		return nil
 	}
 
+	metrics.Count("ayum_nrpms_to_install", len(rpmsToInstall))
+
 	localPackages, err := c.Installed(ctx)
 	if err != nil {
 		return err
 	}
 
-	c.log.Info("Checked for locally installed packages", logging.F("nFound", len(*localPackages)))
+	c.log.Info(
+		"Checked for locally installed packages",
+		logging.F("nFound", len(*localPackages)),
+	)
+
+	metrics.Count("ayum_nlocal_packages", len(*localPackages))
 
 	rpmsNames := removeFileExt(rpmsToInstall...)
 	toReinstall, toInstall := localPackages.matching(rpmsNames...)
@@ -62,46 +66,26 @@ func (c *cmdInstall) Install(ctx context.Context, rpmsToInstall ...string) error
 }
 
 func (c *cmdInstall) installRPMs(ctx context.Context, rpms ...string) error {
-	return c.doInstall(ctx, false, rpms)
+	return c.doInstall(ctx, c.rpmInstaller, rpms)
 }
 
 func (c *cmdInstall) reinstallRPMs(ctx context.Context, rpms ...string) error {
-	return c.doInstall(ctx, true, rpms)
+	return c.doInstall(ctx, c.rpmReinstaller, rpms)
 }
 
-func (c *cmdInstall) doInstall(ctx context.Context, reinstall bool, rpms []string) error {
+func (c *cmdInstall) doInstall(ctx context.Context, runner ayumCmdRunner, rpms []string) error {
 	if len(rpms) == 0 {
 		return nil
 	}
 
-	var action = "install"
-	if reinstall {
-		action = "reinstall"
-	}
+	// Format and set the ayum install command with the rpms
+	fullCmd := fmt.Sprintf(runner.Command(), strings.Join(rpms, " "))
+	runner.SetCommand(fullCmd)
 
-	cmd := append(
-		c.preCmds,
-		append(
-			[]string{
-				fmt.Sprintf("%s -y %s %s", c.ayumExe, action, strings.Join(rpms, " ")),
-			},
-			c.postCmds...,
-		)...,
-	)
-
-	ac := ayumCommand{
-		cmd: cmd,
-		opts: []shell.Option{
-			shell.Context(ctx),
-			shell.Timeout(time.Duration(c.timeout) * time.Second),
-		},
-	}
-
-	ac.run()
+	err := runner.Run(shell.Context(ctx))
 
 	// TODO: error check and log messages
-
-	return nil
+	return err
 }
 
 // removeFileExt is a helper function to remove the file extension from a list of file names

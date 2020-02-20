@@ -3,15 +3,17 @@ package config
 import (
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/brinick/atlas-rpm-installer/pkg/filesystem/cvmfs"
 )
 
-type cvmfsOpts struct {
+// CvmfsOpts are options for CVMFS
+type CvmfsOpts struct {
 	cvmfs.Opts
 }
 
-func (c *cvmfsOpts) flags() {
+func (c *CvmfsOpts) flags() {
 	flag.StringVar(
 		&c.Binary,
 		"cvmfs.exe",
@@ -41,7 +43,7 @@ func (c *cvmfsOpts) flags() {
 	)
 }
 
-func (c *cvmfsOpts) validate() error {
+func (c *CvmfsOpts) validate() error {
 	var min, max = 1, 30
 	if c.MaxTransactionAttempts < min || c.MaxTransactionAttempts > max {
 		return fmt.Errorf(
@@ -51,4 +53,17 @@ func (c *cvmfsOpts) validate() error {
 		)
 	}
 	return nil
+}
+
+func (c *CvmfsOpts) String() string {
+	return strings.Join(
+		[]string{
+			"- CVMFS Options:",
+			fmt.Sprintf("   - Binary: %s", c.Binary),
+			fmt.Sprintf("   - Gateway Node: %s", c.GatewayNode),
+			fmt.Sprintf("   - Nightly Repo: %s", c.NightlyRepo),
+			fmt.Sprintf("   - Max Open Transaction Attempts: %d", c.MaxTransactionAttempts),
+		},
+		"\n",
+	)
 }

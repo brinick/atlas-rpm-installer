@@ -66,7 +66,7 @@ func (inst *Installer) getRemoteRepos() []*rpm.Repo {
 		&rpm.Repo{
 			Label:  "atlas-offline-nightly",
 			Name:   "ATLAS offline nightly releases",
-			URL:    inst.opts.RPMSrcDir,
+			URL:    inst.rpms.SrcDir(),
 			Prefix: filepath.Join(inst.opts.InstallBaseDir, inst.opts.Timestamp),
 		},
 	}
