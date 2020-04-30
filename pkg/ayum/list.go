@@ -23,7 +23,11 @@ type cmdList struct {
 // the package list is nil.
 func (c *cmdList) Installed(ctx context.Context) (*localPackages, error) {
 	c.cmd.Run(shell.Context(ctx))
-	if c.cmd.Result().Err() == nil {
+
+	err := c.cmd.Result().Err()
+
+	// All ok, return package list
+	if err == nil {
 		packages := c.parseInstalled(c.cmd.Result().Stdout().Text())
 		return packages, nil
 	}
@@ -31,11 +35,13 @@ func (c *cmdList) Installed(ctx context.Context) (*localPackages, error) {
 	stdout := c.cmd.Result().Stdout()
 	stderr := c.cmd.Result().Stderr()
 
+	// There was a "No packages installed" error, which is not really an error
 	if stdout.Text() == stderr.Text() {
 		c.log.Info("No locally installed packages")
 		return &localPackages{}, nil
 	}
 
+	// There was a real error
 	c.log.Error(
 		"Unable to retrieve locally installed package list",
 		logging.F("err", c.cmd.Result().Err()),
@@ -49,8 +55,7 @@ func (c *cmdList) Installed(ctx context.Context) (*localPackages, error) {
 		c.log.Error(line)
 	}
 
-	// TODO: report exactly why it failed
-	return nil, fmt.Errorf("ayum list installed - command failed")
+	return nil, fmt.Errorf("ayum list installed - command failed: %v", err)
 }
 
 // parseInstalled parses the text returned by the ayum list installed command
