@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,14 +16,6 @@ import (
 	"github.com/brinick/fs"
 	"github.com/brinick/logging"
 )
-
-// TODO: are we consistent with setting the Installer err field?
-
-/*
-var (
-	ErrTransactionClose = fmt.Errorf("failed to close transaction")
-)
-*/
 
 // ----------------------------------------------------------------------
 // - Interfaces to decouple dependencies for injection
@@ -54,6 +47,7 @@ type ayumer interface {
 	rpmRepoAdder
 	cleaner
 	installer
+	Log() logging.Logger
 }
 
 type rpmRepoer interface {
@@ -67,7 +61,7 @@ type rpmFinder interface {
 }
 
 type tagsFiler interface {
-	Src() string
+	Src() *fs.File
 	Remove(...string) error
 	Append(*tagsfile.Entries) error
 	Save() error
@@ -77,24 +71,23 @@ type tagsFiler interface {
 
 // Opts configures the Installer
 type Opts struct {
-	Branch string
-
-	Platform  string
-	Timestamp string
-	Project   string
+	Branch    string `json:"branch"`
+	Platform  string `json:"platform"`
+	Timestamp string `json:"timestamp"`
+	Project   string `json:"project"`
 
 	// Base directory below which we install
-	InstallBaseDir string
+	InstallBaseDir string `json:"install_base_dir"`
 
 	// Directory where we do our work
-	WorkBaseDir string
+	WorkBaseDir string `json:"work_base_dir"`
 
 	// Directory where the stable releases
 	// repository is located (to get dependencies)
-	StableReleasesDir string
+	StableReleasesDir string `json:"stable_releases_dir"`
 
 	// TagsFile is the path to the tags file
-	TagsFile string
+	TagsFile string `json:"tagsfile"`
 }
 
 func (o *Opts) String() string {
@@ -111,7 +104,14 @@ func (o *Opts) String() string {
 // ---------------------------------------------------------------------
 
 // New returns an installer that can perform an install.
-func New(opts *Opts, t filesystem.Transactioner, ay ayumer, finder rpmFinder, tags tagsFiler, log logging.Logger) *Installer {
+func New(
+	opts *Opts,
+	t filesystem.Transactioner,
+	ay ayumer,
+	finder rpmFinder,
+	tags tagsFiler,
+	log logging.Logger,
+) *Installer {
 	return &Installer{
 		opts:        opts,
 		log:         log,
@@ -131,15 +131,17 @@ type Errors []error
 
 // Append appends the error
 func (e *Errors) Append(err error) {
-	*e = append(*e, err)
+	if err != nil {
+		*e = append(*e, err)
+	}
 }
 
 func (e *Errors) String() string {
-	return ""
-}
-
-func (e *Errors) Error() string {
-	return ""
+	var o []string
+	for _, err := range *e {
+		o = append(o, fmt.Sprintf("%v", err))
+	}
+	return strings.Join(o, "\n")
 }
 
 // ---------------------------------------------------------------------
@@ -157,9 +159,14 @@ type Installer struct {
 	err         *Errors
 }
 
-// Error returns any installer error (or internal ayum error)
-func (inst *Installer) Error() string {
-	return fmt.Sprintf("%v", *inst.err)
+// IsError indicates if any errors have occured
+func (inst *Installer) IsError() bool {
+	return len(*inst.err) > 0
+}
+
+// Err returns the installer Errors instance
+func (inst *Installer) Err() *Errors {
+	return inst.err
 }
 
 // Done returns a channel to wait for the installer to be done
@@ -167,39 +174,44 @@ func (inst *Installer) Done() <-chan struct{} {
 	return inst.doneChan
 }
 
+// Aborted indicates if this installer was stopped prematurely,
+// likely because a context was canceled
+func (inst *Installer) Aborted() bool {
+	return inst.aborted
+}
+
 // Execute will perform the install
 func (inst *Installer) Execute(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			inst.log.Info("Recovered from panic", logging.F("err", r))
-			inst.err.Append(fmt.Errorf("%v", r))
+			inst.err.Append(PanicRecoverError{fmt.Sprintf("%v", r)})
 		}
 		inst.setDone()
 	}()
 
 	// stop on error
 	if err := inst.openTransaction(ctx); err != nil {
-		inst.err.Append(err)
+		inst.err.Append(NewTransactionOpenError(err))
 		inst.aborted = true
 		return
 	}
 
 	defer func() {
-		if err := inst.closeTransaction(ctx); err != nil {
-			// TODO: warn via email/slack etc about transaction close failure
-			inst.err.Append(fmt.Errorf("failed to close transaction (%w)", err))
-		}
+		inst.err.Append(inst.copyAyumLog())
+
+		inst.endTransaction(ctx)
 	}()
 
 	// Launch the install in the background
 	go func() {
+		defer inst.setDone()
 		if err := inst.doInstall(ctx); err != nil {
 			inst.err.Append(err)
 		}
 	}()
 
-	// Wait for either the install to be done,
-	// or a signal to be trapped (in which case we abort the install)
+	// Wait for either the install or the context to be done
 	select {
 	case <-inst.Done():
 		// we're done here, let's go home
@@ -209,18 +221,78 @@ func (inst *Installer) Execute(ctx context.Context) {
 	}
 }
 
+func (inst *Installer) endTransaction(ctx context.Context) {
+	// TODO: how to check if the transaction is still open at the end, which
+	// will mess with future installation attempts.
+
+	// Should we end by abort, or by normal close?
+	shouldAbort := inst.IsError() &&
+		!(len(*inst.err) == 1 && errors.Is((*inst.err)[0], AyumCopyLogError{}))
+
+	switch shouldAbort {
+	case true:
+		if err := inst.abortTransaction(ctx); err != nil {
+			inst.err.Append(NewTransactionAbortError(err))
+		}
+	case false:
+		if err := inst.closeTransaction(ctx); err != nil {
+			inst.err.Append(NewTransactionCloseError(err))
+		}
+	}
+
+}
+
+// NightlyID returns a string that identifies this given nightly branch
+func (inst *Installer) NightlyID() string {
+	return fmt.Sprintf(
+		"%s_%s_%s",
+		inst.opts.Branch,
+		inst.opts.Project,
+		inst.opts.Platform,
+	)
+}
+
+// NightlyInstallDir returns the full path to the installation directory
+// for this nightly
+func (inst *Installer) NightlyInstallDir() string {
+	return filepath.Join(
+		inst.opts.InstallBaseDir,
+		inst.NightlyID(),
+		inst.opts.Timestamp,
+	)
+}
+
+func (inst *Installer) copyAyumLog() error {
+	ayumLog := inst.ayum.Log().Path()
+	tgtDir := inst.NightlyInstallDir()
+
+	if err := os.MkdirAll(tgtDir, 0755); err != nil {
+		return AyumCopyLogError{
+			msg: fmt.Sprintf("cannot create directory %s (%v)", tgtDir, err),
+		}
+	}
+
+	if err := fs.CopyFile(ayumLog, tgtDir); err != nil {
+		return AyumCopyLogError{
+			msg: fmt.Sprintf(
+				"cannot copy ayum log (%s) to directory %s (%v)",
+				ayumLog,
+				tgtDir,
+				err,
+			),
+		}
+	}
+
+	return nil
+}
+
 func (inst *Installer) setDone() {
-	// Close of a closed channel panics, hence this check
+	// Close of a closed channel panics, hence this check in case we
+	// already called this function previously
 	_, isOpen := <-inst.doneChan
 	if isOpen {
 		close(inst.doneChan)
 	}
-}
-
-// Aborted indicates if this installer was stopped prematurely,
-// likely because a context was canceled
-func (inst *Installer) Aborted() bool {
-	return inst.aborted
 }
 
 func (inst *Installer) getRPMsList() ([]*rpm.RPMs, error) {
@@ -229,60 +301,108 @@ func (inst *Installer) getRPMsList() ([]*rpm.RPMs, error) {
 		return nil, err
 	}
 
-	// Split RPMs
-	isCacheNightly := (strings.Count(inst.opts.Branch, ".")) > 2
-	if isCacheNightly {
+	if inst.isCacheNightly() {
 		return []*rpm.RPMs{rpms}, nil
 	}
 
+	return inst.splitRPMsList(rpms), nil
+}
+
+func (inst *Installer) isCacheNightly() bool {
+	return (strings.Count(inst.opts.Branch, ".")) > 2
+}
+
+// If we are installing a full nightly release, we should split the list
+// of RPMs into two: those for the offline and those for AtlasHLT.
+func (inst *Installer) splitRPMsList(rpms *rpm.RPMs) []*rpm.RPMs {
 	var offline, hlt rpm.RPMs
-	foundOffline := false
+	var foundOffline, foundHLT bool
 
 	for _, r := range *rpms {
-		if strings.HasPrefix(r.Name(), "AtlasHLT") {
-			hlt = rpm.RPMs{r}
+		if r.NameStartsWith("AtlasHLT") {
+			hlt = append(hlt, r)
 			continue
 		}
 
-		offline = rpm.RPMs{r}
-		foundOffline = foundOffline || strings.HasPrefix(r.Name(), "AtlasOffline")
+		offline = append(offline, r)
+		foundOffline = foundOffline || r.NameStartsWith("AtlasOffline")
 	}
 
-	var list []*rpm.RPMs
-	if foundOffline && hlt != nil {
-		list = []*rpm.RPMs{&offline, &hlt}
-	} else {
-		list = []*rpm.RPMs{rpms}
+	if foundOffline && foundHLT {
+		return []*rpm.RPMs{&offline, &hlt}
 	}
 
-	return list, nil
+	return []*rpm.RPMs{rpms}
 }
 
 func (inst *Installer) doInstall(ctx context.Context) error {
-	rpmsList, err := inst.getRPMsList()
+	// 1. Get the RPMs that should be installed
+	rpmsList, err := inst.getRPMs(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := inst.configure(ctx); err != nil {
+	// 2. Download and configure ayum
+	if err = inst.configure(ctx); err != nil {
 		return err
 	}
 
-	var installOK bool
+	// TODO: check that the number of RPMs in EOS nightly dir matches the number
+	// installed in our install directory
+
+	// 3. Use ayum to (re)install the RPMs
+	var installErr = NewInstallError()
 	for _, rpms := range rpmsList {
-		if err = inst.installRPMs(ctx, rpms); err == nil {
-			installOK = true
+		installErr.add(inst.installRPMs(ctx, rpms))
+
+		// Stop if the context is done, and return its error
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
 		}
 	}
 
-	if !installOK {
-		inst.cleanDirs()
-		// send email
+	nErrs := installErr.length()
+	nInstalls := len(rpmsList)
+
+	switch {
+	case nErrs == 0:
+		return nil
+	case nErrs < nInstalls:
+		return installErr
+	default:
+		// No installs were successful
+		if err := inst.cleanDirs(ctx); err != nil {
+			return NewMultiError(installErr, err)
+		}
+
+		return installErr
+	}
+}
+
+func (inst *Installer) getRPMs(ctx context.Context) ([]*rpm.RPMs, error) {
+	var (
+		err      error
+		done     = make(chan struct{})
+		rpmsList []*rpm.RPMs
+	)
+
+	go func() {
+		defer close(done)
+		rpmsList, err = inst.getRPMsList()
+	}()
+
+	select {
+	case <-done:
+		if err != nil {
+			return nil, RPMFinderError{err}
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 
-	// copy ayum log
-
-	return nil
+	return rpmsList, nil
 }
 
 // installRPMs installs a given set of RPMs
@@ -291,14 +411,26 @@ func (inst *Installer) installRPMs(ctx context.Context, rpms *rpm.RPMs) error {
 		return err
 	}
 
-	inst.cleanDirs()
-	inst.ayum.CleanAll(ctx, "atlas-offline-nightly")
+	if err := inst.cleanDirs(ctx); err != nil {
+		return err
+	}
 
+	// TODO: configure this name
+	if err := inst.ayum.CleanAll(ctx, "atlas-offline-nightly"); err != nil {
+		return err
+	}
+
+	inst.log.Info("Everything complete!")
 	return inst.writeTagsFile()
 }
 
 func (inst *Installer) writeTagsFile() error {
-	nightlyDir := fs.Dir(inst.opts.InstallBaseDir, inst.opts.Branch, inst.opts.Timestamp)
+	inst.log.Info("Writing tags file", logging.F("tgt", inst.tags.Src()))
+	nightlyDir, err := fs.NewDir(inst.NightlyInstallDir())
+	if err != nil {
+		return err
+	}
+
 	projectDirs, err := nightlyDir.SubDirs()
 	if err != nil {
 		return fmt.Errorf("failed to list sub-dirs of %s (%w)", nightlyDir.Path, err)
@@ -334,25 +466,44 @@ func (inst *Installer) writeTagsFile() error {
 		)
 	}
 
+	if err := inst.tags.Append(entries); err != nil {
+		return err
+	}
+
 	inst.tags.Remove(".cvmfscatalog", ".ayum.log")
-	inst.tags.Append(entries)
 	return inst.tags.Save()
 }
 
 // cleanDirs removes certain install directories, post install
-func (inst *Installer) cleanDirs() error {
-	installdir := filepath.Join(inst.opts.InstallBaseDir, inst.opts.Branch)
+func (inst *Installer) cleanDirs(ctx context.Context) error {
+	var (
+		err  error
+		done = make(chan struct{})
+	)
 
-	toDelete := []string{".yumcache"}
-	if inst.opts.Branch == "master" || inst.opts.Branch == "master-GAUDI" {
-		toDelete = append(toDelete, "tdaq", "tdaq-common", "dqm-common")
+	go func() {
+		defer close(done)
+		installdir := filepath.Join(inst.opts.InstallBaseDir, inst.NightlyID())
+
+		toDelete := []string{".yumcache"}
+		if inst.opts.Branch == "master" || inst.opts.Branch == "master-GAUDI" {
+			toDelete = append(toDelete, "tdaq", "tdaq-common", "dqm-common")
+		}
+
+		for i, d := range toDelete {
+			toDelete[i] = filepath.Join(installdir, d)
+		}
+
+		err = fs.Dirs(toDelete...).Remove()
+	}()
+
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-done:
 	}
 
-	for i, d := range toDelete {
-		toDelete[i] = filepath.Join(installdir, d)
-	}
-
-	return fs.Dirs(toDelete...).Remove()
+	return err
 }
 
 // configure readies the installer for installing RPMs,
@@ -375,6 +526,7 @@ func (inst *Installer) configure(ctx context.Context) error {
 		return err
 	}
 
+	// TODO: configure the name of this repo
 	if err = inst.ayum.CleanAll(ctx, "atlas-offline-nightly"); err != nil {
 		return err
 	}
@@ -400,6 +552,9 @@ func (inst *Installer) openTransaction(ctx context.Context) error {
 }
 
 func (inst *Installer) closeTransaction(ctx context.Context) error {
-	// TODO: get error from close and email/log etc if failed to close
 	return inst.transaction.Close(ctx)
+}
+
+func (inst *Installer) abortTransaction(ctx context.Context) error {
+	return inst.transaction.Kill(ctx)
 }

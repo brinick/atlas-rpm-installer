@@ -23,14 +23,14 @@ func SetFieldSeparator(s string) {
 
 // New creates a new tags file instance based on src.
 // If editing of the file is requested (writing to, deleting entries),
-// the src is first copied to the given tmp directory, and the edits
+// the src is first copied to the given bckupDir directory, and the edits
 // are made on the copy. It is up to the client to request a Write
-// to push these changes to the src.
-func New(src string, tmp string) *TagsFile {
+// to push these changes back to the src.
+func New(src string, bckupDir string) *TagsFile {
 	now := time.Now().UnixNano()
 	return &TagsFile{
-		src: src,
-		bck: filepath.Join(tmp, fmt.Sprintf("AMItags.%d", now)),
+		src: fs.NewFile(src),
+		bck: fs.NewFile(filepath.Join(bckupDir, fmt.Sprintf("AMItags.%d", now))),
 	}
 }
 
@@ -38,6 +38,11 @@ func New(src string, tmp string) *TagsFile {
 
 // Entries represents a list of Entry instances
 type Entries []*Entry
+
+// Size returns the number of Entry elements in this slice
+func (e *Entries) Size() int {
+	return len(*e)
+}
 
 // Add will append Entry instances to the current list
 func (e *Entries) Add(entries ...*Entry) {
@@ -52,14 +57,15 @@ func (e *Entries) Append(entries *Entries) {
 
 // Remove will delete any entry where a given field
 // matches against one of the passed in strings
-func (e *Entries) Remove(values []string) error {
+func (e *Entries) Remove(values []string) {
+	var newE = (*e)[:0]
 	for _, entry := range *e {
-		if entry.contains(values) {
-
+		if !entry.contains(values) {
+			newE = append(newE, entry)
 		}
 	}
 
-	return nil
+	*e = newE
 }
 
 // AsLines returns the entries as a list of strings
@@ -120,13 +126,189 @@ func (e *Entry) String() string {
 // TagsFile represents a tags file
 type TagsFile struct {
 	// The source of the tags file
-	src string
+	src *fs.File
+
+	// Last modification time of the src tags file
+	srcModTime time.Time
 
 	// The copy of the src file, on which edits are made
-	bck string
+	bck *fs.File
 
 	// The list of entries in the tags file
 	entries *Entries
+}
+
+// Size returns the number of entries/lines in this tagsfile
+// If the file has not yet been loaded, 0 will be returned.
+func (t *TagsFile) Size() int {
+	if t.entries == nil {
+		return 0
+	}
+	return t.entries.Size()
+}
+
+// Src returns the path to the source tags file
+func (t *TagsFile) Src() *fs.File {
+	return t.src
+}
+
+// Remove will delete any tag file entries that contain
+// any of the passed in strings
+func (t *TagsFile) Remove(values ...string) error {
+	if len(values) == 0 {
+		return nil
+	}
+
+	if t.entries == nil {
+		return fmt.Errorf("tagsfile not loaded yet, cannot remove entries")
+	}
+
+	t.entries.Remove(values)
+	return nil
+}
+
+// GetEntries returns the Entries object containing
+// the list of tags file entries
+func (t *TagsFile) GetEntries() *Entries {
+	return t.entries
+}
+
+// Add appends a single tagsfile Entry onto this tags file
+func (t *TagsFile) Add(entry *Entry) error {
+	if entry == nil {
+		return nil
+	}
+
+	// Have not yet loaded the file
+	if t.entries == nil {
+		if err := t.load(); err != nil {
+			return err
+		}
+	}
+
+	t.entries.Add(entry)
+	return nil
+}
+
+// Append will add the given entries to the end of the tags file
+func (t *TagsFile) Append(entries *Entries) error {
+	if entries == nil || len(*entries) == 0 {
+		return nil
+	}
+
+	// Have not yet loaded the file
+	if t.entries == nil {
+		if err := t.load(); err != nil {
+			return err
+		}
+	}
+
+	t.entries.Append(entries)
+	return nil
+}
+
+// Save will write out the entries in memory to the source tags file
+func (t *TagsFile) Save() error {
+	// First, dump the in-memory entries to the temp file.
+	// Then copy that file to original tags file src.
+	data := t.entries.AsLines()
+	// TODO: save empty file will fail?
+	if err := t.bck.WriteLines(data); err != nil {
+		return fmt.Errorf("failed to open file %s for writing (%w)", t.bck.Path, err)
+	}
+
+	// Check now that the original file has not changed since
+	// we first loaded it
+	mod, err := t.src.ModTime()
+	if err != nil {
+		return fmt.Errorf("unable to check if tags file has been updated (%w)", err)
+	}
+
+	if mod.After(t.srcModTime) {
+		return fmt.Errorf("source tags file (%s) has changed, will not overwrite it", t.src)
+	}
+
+	return t.bck.RenameTo(t.src.Path)
+}
+
+func (t *TagsFile) load() error {
+	if err := t.checkSrcExists(); err != nil {
+		return err
+	}
+
+	if err := t.saveSrcModTime(); err != nil {
+		return err
+	}
+
+	if err := t.backupSrc(); err != nil {
+		return err
+	}
+
+	fd, err := os.Open(t.bck.Path)
+	if err != nil {
+		return fmt.Errorf("unable to open backup tags file %s (%w)", t.bck, err)
+	}
+
+	defer fd.Close()
+
+	entries, err := t.getEntriesFromFile(fd)
+	if err != nil {
+		return err
+	}
+
+	t.entries = entries
+	return nil
+}
+
+func (t *TagsFile) checkSrcExists() error {
+	exists, err := t.src.Exists()
+	if err != nil {
+		return fmt.Errorf("unable to check if tagsfile exists: %w", err)
+	}
+
+	if !exists {
+		return fs.InexistantError{Path: t.src.Path}
+	}
+
+	return nil
+}
+
+func (t *TagsFile) backupSrc() error {
+	if err := t.src.ExportTo(t.bck.Path); err != nil {
+		return fmt.Errorf("failed to back up src tags file (%s) to %s: %w", t.src.Path, t.bck.Path, err)
+	}
+
+	return nil
+}
+
+func (t *TagsFile) saveSrcModTime() error {
+	md, err := t.src.ModTime()
+	if err != nil {
+		err = fmt.Errorf("failed to get src tags file last modification time (%v)", err)
+		return err
+	}
+
+	t.srcModTime = *md
+	return nil
+}
+
+func (t *TagsFile) getEntriesFromFile(fd *os.File) (*Entries, error) {
+	var (
+		entries Entries
+		err     error
+	)
+	scanner := bufio.NewScanner(fd)
+	for scanner.Scan() {
+		line := scanner.Text()
+		entry, err := t.createEntry(line)
+		if err != nil {
+			break
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return &entries, err
 }
 
 // createEntry creates a new tags file Entry from a given file line of text
@@ -167,91 +349,4 @@ func (t *TagsFile) createEntry(line string) (*Entry, error) {
 		NextRel:  toks[1],
 		Platform: fields[4],
 	}, nil
-}
-
-// Src returns the path to the source tags file
-func (t *TagsFile) Src() string {
-	return t.src
-}
-
-// Remove will delete any tag file entries that contain
-// any of the passed in strings
-func (t *TagsFile) Remove(values ...string) error {
-	if len(values) == 0 {
-		return nil
-	}
-
-	// Have not yet loaded the file
-	if t.entries == nil {
-		if err := t.load(); err != nil {
-			return fmt.Errorf("failed to load tags file (%w)", err)
-		}
-	}
-
-	return t.entries.Remove(values)
-}
-
-// GetEntries returns the Entries object containing
-// the list of tags file entries
-func (t *TagsFile) GetEntries() *Entries {
-	return t.entries
-}
-
-// Append will add the given entries to the end of the tags file
-func (t *TagsFile) Append(entries *Entries) error {
-	if entries == nil || len(*entries) == 0 {
-		return nil
-	}
-
-	// Have not yet loaded the file
-	if t.entries == nil {
-		if err := t.load(); err != nil {
-			return fmt.Errorf("failed to load tags file (%w)", err)
-		}
-	}
-
-	t.entries.Append(entries)
-	return nil
-}
-
-// Save will write out the entries in memory to the source tags file
-func (t *TagsFile) Save() error {
-	// TODO: check that the original src file has not
-	// been updated compared to when we first coped it
-
-	// First, dump the in-memory entries to the temp file.
-	// Then copy that file to original tags file src.
-	tmp := fs.File(t.bck)
-	data := t.entries.AsLines()
-	if err := tmp.WriteLines(data, os.O_CREATE|os.O_WRONLY, 0644); err != nil {
-		return fmt.Errorf("failed to open file %s for writing (%w)", t.bck, err)
-	}
-
-	return tmp.CopyTo(t.src)
-}
-
-func (t *TagsFile) load() error {
-	if err := fs.File(t.src).CopyTo(t.bck); err != nil {
-		return fmt.Errorf("failed to copy src tags file to %s (%w)", t.bck, err)
-	}
-
-	fd, err := os.Open(t.bck)
-	if err != nil {
-		return fmt.Errorf("unable to open tags file %s (%w)", t.bck, err)
-	}
-
-	defer fd.Close()
-
-	scanner := bufio.NewScanner(fd)
-	for scanner.Scan() {
-		line := scanner.Text()
-		entry, err := t.createEntry(line)
-		if err != nil {
-			return err
-		}
-
-		*t.entries = append(*t.entries, entry)
-	}
-
-	return nil
 }

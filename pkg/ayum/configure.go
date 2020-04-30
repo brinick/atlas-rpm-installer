@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/brinick/fs"
+	"github.com/brinick/logging"
 	"github.com/brinick/shell"
 )
 
@@ -18,7 +19,8 @@ type configurer interface {
 
 type cmdConfigure struct {
 	installDir string
-	runner     ayumCmdRunner
+	log        logging.Logger
+	cmd        *ayumCommand
 }
 
 // PreConfigure will copy, for cache nightly installations,
@@ -49,13 +51,19 @@ func (c *cmdConfigure) PreConfigure(stableRelBase string) error {
 		return fmt.Errorf("unable to remove directory tree %s (%w)", dst, err)
 	}
 
-	return fs.Dir(stableRelSrc, ".rpmdb").CopyTo(dst)
+	newdir, err := fs.NewDir(stableRelSrc, ".rpmdb")
+	if err != nil {
+		return err
+	}
+
+	return newdir.CopyTo(dst)
 }
 
 // Configure configures the yum.conf file with the given install directory path
 func (c *cmdConfigure) Configure(ctx context.Context) error {
-	err := c.runner.Run(shell.Context(ctx))
+	// Run the command
+	c.cmd.Run(shell.Context(ctx))
 
-	// TODO: add logging, check errors
-	return err
+	// Analyse the result, and send output to the given logger
+	return doPostMortem(c.cmd, c.log)
 }

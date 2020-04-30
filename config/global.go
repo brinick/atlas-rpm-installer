@@ -16,7 +16,7 @@ func (g *GlobalOpts) flags() {
 		&g.TimeOut,
 		"global.timeout",
 		0,
-		"Number of seconds after which the whole install process should abort",
+		"Integer number of seconds after which the whole install process should abort (default 0 i.e. no timeout)",
 	)
 }
 

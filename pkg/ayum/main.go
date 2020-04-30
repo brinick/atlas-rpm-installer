@@ -11,7 +11,8 @@ import (
 // The queue to which metrics may be pushed, if requested
 var metrics *metric.Queue
 
-type metricQueue interface {
+// MetricQueue defines the interface for fetching metrics from the queue
+type MetricQueue interface {
 	Items() <-chan string
 }
 
@@ -19,7 +20,7 @@ type metricQueue interface {
 // The queue is nil i.e. no metrics are output, unless the ayum struct is
 // created with the Opts.MonitoringFormat set to the name of the
 // metric encoder to use.
-func Metrics() metricQueue {
+func Metrics() MetricQueue {
 	return metrics
 }
 
@@ -47,9 +48,10 @@ func New(opts *Opts, log logging.Logger) *Ayum {
 		Dir:        opts.AyumDir,
 		Binary:     binary,
 		InstallDir: opts.InstallDir,
-		Log:        log,
+		log:        log,
 		downloader: &cmdDownload{
 			srcRepo: opts.SrcRepo,
+			tgtDir:  opts.AyumDir,
 			timeout: opts.DownloadTimeout,
 		},
 		rpmRepoAdder: &rpmRepoAdd{
@@ -57,7 +59,8 @@ func New(opts *Opts, log logging.Logger) *Ayum {
 		},
 		configurer: &cmdConfigure{
 			installDir: opts.InstallDir,
-			runner: &ayumCommand{
+			log:        log,
+			cmd: &ayumCommand{
 				label:   "ayum configure",
 				timeout: opts.Timeout,
 				preCmds: preCmds,
@@ -71,9 +74,10 @@ func New(opts *Opts, log logging.Logger) *Ayum {
 			},
 		},
 		installer: &cmdInstall{
+			log: log,
 			lister: &cmdList{
 				log: log,
-				runner: &ayumCommand{
+				cmd: &ayumCommand{
 					label:    "ayum list",
 					timeout:  opts.Timeout,
 					preCmds:  preCmds,
@@ -93,14 +97,16 @@ func New(opts *Opts, log logging.Logger) *Ayum {
 				cmd:      fmt.Sprintf("%s -y reinstall ", binary) + "%s",
 				postCmds: postCmds,
 			},
-			log: log,
 		},
 		cleaner: &cmdClean{
-			timeout: opts.Timeout,
-			runner: &ayumCommand{
+			log: log,
+			// timeout: opts.Timeout,
+			cmd: &ayumCommand{
 				label:   "ayum clean all",
 				preCmds: preCmds,
-				cmd:     fmt.Sprintf("%s --enablerepo=%s clean all", binary, "atlas-offline-nightly"),
+				cmd: binary +
+					"--enablerepo=%s" + // repo name to clean, filled in later
+					"clean all",
 			},
 		},
 	}
@@ -154,6 +160,11 @@ type Ayum struct {
 	// InstallDir is the root dir of the install path
 	InstallDir string
 
-	// Log is a logger instance
-	Log logging.Logger
+	// log is a logger instance
+	log logging.Logger
+}
+
+// Log retrieves the logging instance to which ayum output is sent
+func (a *Ayum) Log() logging.Logger {
+	return a.log
 }

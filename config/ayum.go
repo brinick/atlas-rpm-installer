@@ -18,14 +18,14 @@ func (a *AyumOpts) flags() {
 		&a.AyumDir,
 		"ayum.dir",
 		"",
-		"Directory into which we download the AYUM source repo",
+		"Directory into which we download the AYUM source repo (default is value of the -dirs.work variable)",
 	)
 
 	flag.StringVar(
 		&a.InstallDir,
 		"ayum.install-dir",
 		"",
-		"Directory below which to install RPMs",
+		"Directory below which to install RPMs (default is value of the -dirs.install + <branchName>)",
 	)
 
 	flag.StringVar(
@@ -55,6 +55,13 @@ func (a *AyumOpts) flags() {
 		3600,
 		"Maximum number of seconds to allow for running an ayum install command",
 	)
+
+	flag.StringVar(
+		&a.MonitoringFormat,
+		"ayum.monitoring-format",
+		"",
+		"Output monitoring format e.g. statsd (default no monitoring)",
+	)
 }
 
 func (a *AyumOpts) validate() error {
@@ -71,6 +78,7 @@ func (a *AyumOpts) String() string {
 			fmt.Sprintf("   - Download TimeOut: %ds", a.DownloadTimeout),
 			fmt.Sprintf("   - Command TimeOut: %ds", a.Timeout),
 			fmt.Sprintf("   - Install TimeOut: %ds", a.InstallTimeout),
+			fmt.Sprintf("   - Monitoring Format: %s", a.MonitoringFormat),
 		},
 		"\n",
 	)

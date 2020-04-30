@@ -1,8 +1,10 @@
-package config
+package config_test
 
 import (
 	"os"
 	"testing"
+
+	"github.com/brinick/atlas-rpm-installer/config"
 )
 
 func TestConfig(t *testing.T) {
@@ -16,7 +18,7 @@ func TestConfig(t *testing.T) {
 		"--global.timeout", "5",
 		"-cvmfs.max-transaction-attempts", "12",
 	}
-	c, _ := New()
+	c, _ := config.New()
 	if c.Global.TimeOut != 5 {
 		t.Errorf("global timeout is %ds, expected 5s", c.Global.TimeOut)
 	}

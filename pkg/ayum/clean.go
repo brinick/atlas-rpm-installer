@@ -2,7 +2,9 @@ package ayum
 
 import (
 	"context"
+	"fmt"
 
+	"github.com/brinick/logging"
 	"github.com/brinick/shell"
 )
 
@@ -11,14 +13,17 @@ type cleaner interface {
 }
 
 type cmdClean struct {
-	timeout int
-	runner  ayumCmdRunner
+	// timeout int
+	log logging.Logger
+	cmd *ayumCommand
 }
 
-// CleanAll runs an ayum clean all on the given repository
-func (c *cmdClean) CleanAll(ctx context.Context, repoName string) error {
-	err := c.runner.Run(shell.Context(ctx))
+// CleanAll runs an ayum clean all on the repository of the given name
+func (c *cmdClean) CleanAll(ctx context.Context, name string) error {
+	// Update the command string
+	c.cmd.cmd = fmt.Sprintf(c.cmd.cmd, name)
 
-	// TODO: check error and log messages, return correctly
-	return err
+	// Run the command
+	c.cmd.Run(shell.Context(ctx))
+	return doPostMortem(c.cmd, c.log)
 }

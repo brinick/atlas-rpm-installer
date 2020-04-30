@@ -1,9 +1,12 @@
 package main
 
+//TODO: .keep file in nightlies to indicate we don't delete after 30 days
+
 import (
 	"context"
 	_ "expvar" // register the /debug/vars endpoint for metrics
 	"fmt"
+	"io/ioutil"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -16,21 +19,21 @@ import (
 
 	"github.com/brinick/atlas-rpm-installer/pkg/ayum"
 	"github.com/brinick/atlas-rpm-installer/pkg/filesystem"
+	"github.com/brinick/atlas-rpm-installer/pkg/filesystem/afs"
 	"github.com/brinick/atlas-rpm-installer/pkg/filesystem/cvmfs"
+	"github.com/brinick/atlas-rpm-installer/pkg/filesystem/localfs"
+	"github.com/brinick/atlas-rpm-installer/pkg/notify"
 	"github.com/brinick/atlas-rpm-installer/pkg/rpm"
 	"github.com/brinick/atlas-rpm-installer/pkg/tagsfile"
 
 	"github.com/brinick/logging"
 )
 
-func init() {
-	// Should we set up and expose expvar end points for monitoring?
-	if cfg.Admin.Monitor {
-
-	}
-}
-
 var (
+	version string
+
+	startEpoch = time.Now().Unix()
+
 	// ExitCode contains the mapping of int exit codes
 	// to a name that explains what it means
 	ExitCode = struct {
@@ -41,44 +44,108 @@ var (
 		SignalEvent     int
 	}{0, 1, 2, 3, 4}
 
-	// Declare a default null logger
-	log logging.Logger = logging.NewNullLogger(nil)
-
 	// Load up the configuration
 	cfg = getConfig()
 )
 
-// TODO: We need to log to stdout/err (with color) and also
-// to file for ayum output (ayum also should go to stdout)
 func main() {
-	defer timeIt(time.Now(), "main")
+	var log logging.Logger
+
+	// Time the execution of this main function i.e. of the whole install process
+	defer func(start time.Time) {
+		d := time.Since(start)
+		if log != nil {
+			log.Debug(
+				"Execution time",
+				logging.F("secs", d.Seconds),
+			)
+		}
+	}(time.Now())
 
 	// Trap int/term signals
 	signalChan := trap()
 	defer close(signalChan)
 
-	log = getLogger(cfg.Logging)
+	// Init the app and ayum loggers
+	var outfile = strings.TrimSpace(cfg.Logging.OutFile)
 
-	ayumLog := filepath.Join(cfg.Dirs.Logs, fmt.Sprintf("%s.ayum.log", cfg.Install.Opts))
+	// Replace special text markers, if they exist, with their corresponding values
+	outfile = strings.ReplaceAll(outfile, "%branch", cfg.Install.Branch)
+	outfile = strings.ReplaceAll(outfile, "%platform", cfg.Install.Platform)
+	outfile = strings.ReplaceAll(outfile, "%project", cfg.Install.Project)
+	outfile = strings.ReplaceAll(outfile, "%timestamp", cfg.Install.Timestamp)
+	outfile = strings.ReplaceAll(outfile, "%start", fmt.Sprintf("%d", startEpoch))
+
+	// Now, make it into an absolute path
+	outfilePath := ""
+	ayumOutFilePath := ""
+	if len(outfile) > 0 {
+		outfilePath = filepath.Join(cfg.Dirs.Logs, outfile+".log")
+		ayumOutFilePath = filepath.Join(cfg.Dirs.Logs, outfile+".ayum.log")
+	}
+
+	// The main install log
+	log, err := logging.NewClient(
+		cfg.Logging.Client,
+		&logging.Config{
+			LogLevel:  cfg.Logging.Level,
+			OutFormat: cfg.Logging.Format,
+			Outfile:   outfilePath,
+		},
+	)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] unable to configure logging (%v)\n", err)
+		os.Exit(ExitCode.ParserError)
+	}
+
+	// The ayum-specific log
+	ayumlog, err := logging.NewClient(
+		cfg.Logging.Client,
+		&logging.Config{
+			LogLevel:  cfg.Logging.Level,
+			OutFormat: cfg.Logging.Format,
+			Outfile:   ayumOutFilePath,
+		},
+	)
+
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[ERROR] unable to configure ayum logging (%v)\n", err)
+		os.Exit(ExitCode.ParserError)
+	}
+
+	log.Debug(fmt.Sprintf("\n--- Configuration Dump ---\n\n%s\n", cfg.String()))
+
+	fsTransactioner := makeTransactioner(fsSelector(cfg.Dirs.InstallBase), log)
+	os.Exit(0)
+
+	// Make a temporary directory for storing the tagsfile editable copy
+	tmpDir, err := ioutil.TempDir("", "AMITags")
+	if err != nil {
+		log.Fatal("failed to create temporary directory for storing tagsfile", logging.ErrField(err))
+	}
+
+	// Clean up the temp tagsfile dir before we exit
+	defer os.RemoveAll(tmpDir)
 
 	// Instantiate the installer with all the required plumbing
 	inst := installer.New(
 		// installation options
 		&cfg.Install.Opts,
 
-		// file system transaction
-		makeTransactioner(fsSelector(cfg.Dirs.InstallBase)),
+		// file system transaction handler
+		fsTransactioner,
 
 		// ayum handler
-		makeAyumer(ayumLog),
+		ayum.New(&cfg.Ayum.Opts, ayumlog),
 
 		// rpm/dependency finder
 		rpm.NewFinder(cfg.Dirs.RPMSrcBase),
 
 		// tagsfile updater
-		tagsfile.New(cfg.Install.TagsFile, os.Getenv("HOME")),
+		tagsfile.New(cfg.Install.TagsFile, tmpDir),
 
-		// Write to the same log file
+		// Use the same log handler everywhere
 		log,
 	)
 
@@ -87,7 +154,7 @@ func main() {
 	ctx, cancelCtx := context.WithCancel(ctx)
 	defer cancelCtx()
 
-	// Add an install timeout, if requested
+	// Add an install global timeout, if requested
 	if cfg.Global.TimeOut > 0 {
 		var timeoutFn context.CancelFunc
 		duration := time.Duration(cfg.Global.TimeOut) * time.Second
@@ -96,49 +163,111 @@ func main() {
 	}
 
 	// Launch the install in the background
-	go inst.Execute(ctx)
+	// go inst.Execute(ctx)
 
-	// And wait...
+	// And now, we wait...
 	select {
 	case sig := <-signalChan:
-		log.Info("Signal trapped, shutting down", logging.F("sig", sig))
+		log.Info("Signal trapped", logging.F("sig", sig))
+		log.Info("Install ABORT")
 		cancelCtx()
 		<-inst.Done()
-		// TODO: log about the signal in ayum log also?
+
+		// Do not _not_ send email...er...ok, so send email
+		if !cfg.Admin.DontSendEmail {
+			log.Info("Email requested on failure, sending...")
+			email := notify.NewEmail(cfg.Admin.EmailFrom, cfg.Admin.EmailTo)
+			res := email.WithTimeout(30).Send(
+				fmt.Sprintf("ABORTED: nightly install %s", inst.NightlyID()),
+				fmt.Sprintf(
+					"The install process with PID %d was terminated "+
+						"(signal %s was trapped)\n"+
+						"The nightly:\n"+
+						"\t%s\n"+
+						"was thus not installed.\n\n"+
+						"Full output available in the log file:\n"+
+						"%s\n",
+					os.Getpid(),
+					sig,
+					inst.NightlyID(),
+					log.Path(),
+				),
+			)
+
+			if res.IsError() {
+				log.Error(
+					"Failed to send email about nightly install being aborted",
+					logging.ErrField(res.Err()),
+				)
+			}
+		}
+
+		os.Exit(ExitCode.SignalEvent)
+
 	case <-inst.Done():
-		//
+		log.Info("Installation done, checking outcome")
 	case <-ctx.Done():
-		// timeout
+		log.Info("Context is done, installation was stopped")
+		<-inst.Done()
 	}
 
-	// TODO: this should return an error not a string
-	if inst.Error() != "" {
-		log.Error("Install FAIL", logging.F("err", inst.Error()))
-		os.Exit(ExitCode.InstallerError)
+	// All ok, no errors, exit normally
+	if !inst.IsError() {
+		log.Info("Install OK")
+		os.Exit(ExitCode.OK)
 	}
 
-	log.Info("Install OK")
-	os.Exit(ExitCode.OK)
+	// TODO: push errors to metrics counts
+
+	// Something went wrong, log errors and send notification, if configured
+	log.Error("Install FAIL")
+
+	for _, err := range *inst.Err() {
+		log.Error(fmt.Sprintf("%v", err))
+	}
+
+	// Send an email, if requested
+	if !cfg.Admin.DontSendEmail {
+		log.Info("Email requested on failure, sending...")
+		errs := *inst.Err()
+		res := notify.NewEmail(cfg.Admin.EmailFrom, cfg.Admin.EmailTo).Send(
+			fmt.Sprintf("FAILED: nightly install %s", inst.NightlyID()),
+			fmt.Sprintf(
+				"The installation for nightly:\n"+
+					"\t%s\n"+
+					"failed. %d error(s) reported:\n\n"+
+					"%s",
+				inst.NightlyID(),
+				len(errs),
+				errs.String(),
+			),
+		)
+
+		if res.IsError() {
+			log.Error(
+				"Failed to send email about nightly install failure",
+				logging.ErrField(res.Err()),
+			)
+		}
+	}
+
+	os.Exit(ExitCode.InstallerError)
 }
 
-func makeAyumer(logPath string) *ayum.Ayum {
-	// Make a specific logger for ayum  - sending to logfile
-	ayumlog := logging.NewClient("logrus", nil)
-	ayumlog.Configure(&logging.Config{Outfile: logPath})
-	return ayum.New(&cfg.Ayum.Opts, ayumlog)
-}
+// makeTransactioner instantiates the appropriate file system transactioner
+func makeTransactioner(is func(string) bool, log logging.Logger) filesystem.Transactioner {
+	var t filesystem.Transactioner
 
-func makeTransactioner(shouldInstallOn func(string) bool) filesystem.Transactioner {
-	var fsTransactioner filesystem.Transactioner
 	switch {
-	case shouldInstallOn("cvmfs"):
-		fsTransactioner = cvmfs.NewTransaction(&cfg.CVMFS.Opts)
+	case is("/cvmfs"):
+		t = cvmfs.NewTransaction(&cfg.CVMFS.Opts, log)
+	case is("/afs"):
+		t = afs.NewTransaction(&cfg.AFS.Opts, log)
 	default:
-		log.Error("Unknown install directory file system")
-		os.Exit(ExitCode.PreInstallError)
+		t = localfs.NewTransaction(&cfg.LocalFS.Opts, log)
 	}
 
-	return fsTransactioner
+	return t
 }
 
 func fsSelector(installdir string) func(string) bool {
@@ -147,38 +276,19 @@ func fsSelector(installdir string) func(string) bool {
 	}
 }
 
-func getLogger(opts *config.LoggingOpts) logging.Logger {
-	return logging.NewClient(
-		opts.Client,
-		&logging.Config{
-			LogLevel:  opts.Level,
-			OutFormat: opts.Format,
-		},
-	)
-}
-
 func getConfig() *config.Config {
 	cfg, err := config.New()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing/validating command line: %v", err)
+		fmt.Fprintf(os.Stderr, "Error parsing configuration: %v\n", err)
 		os.Exit(ExitCode.ParserError)
 	}
 
 	return cfg
 }
 
+// trap sets up a channel to trap term and int signals
 func trap() chan os.Signal {
-	// Set up to trap term and int signals
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGTERM, syscall.SIGINT)
 	return signalChan
-}
-
-func timeIt(start time.Time, name string) {
-	d := time.Since(start)
-	log.Debug(
-		"Execution time",
-		logging.F("name", name),
-		logging.F("secs", d.Seconds),
-	)
 }

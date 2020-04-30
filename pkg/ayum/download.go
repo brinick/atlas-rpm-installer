@@ -2,12 +2,11 @@ package ayum
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"time"
 
-	"gopkg.in/src-d/go-git.v4"
+	git "gopkg.in/src-d/go-git.v4"
 )
 
 type downloader interface {
@@ -32,21 +31,21 @@ func (cmd *cmdDownload) Download(ctx context.Context) error {
 		defer cancelFn()
 	}
 
-	// dir := filepath.Join(filepath.Dir(a.Dir), "ayum")
 	os.RemoveAll(cmd.tgtDir)
 
 	isBare := false
 	opts := &git.CloneOptions{URL: cmd.srcRepo}
 	_, err := git.PlainCloneContext(ctx, cmd.tgtDir, isBare, opts)
 
-	switch err {
-	case nil:
+	if err == nil {
 		return nil
-	case context.DeadlineExceeded:
-		return errors.New("ayum repo git clone took too long and was killed")
-	case context.Canceled:
-		return errors.New("ayum repo git clone is cancelled")
-	default:
-		return fmt.Errorf("ayum repo git clone download failed (%w)", err)
 	}
+
+	select {
+	case <-ctx.Done():
+		err = ctx.Err()
+	default:
+	}
+
+	return fmt.Errorf("ayum repo download failed (%w)", err)
 }

@@ -7,9 +7,15 @@ import (
 	"strings"
 )
 
+// TODO: Provide support for a local configuration file
+// in order to reduce the length of the command line.
+// Priority for a variable's value is:
+// CommandLine > Config file > Flags default value
+
 // New creates a new Config instance
 func New() (*Config, error) {
 	var c Config
+	// c.loadFromJSON()
 	c.instantiate()
 	c.flags()
 	err := c.parse()
@@ -20,7 +26,9 @@ func New() (*Config, error) {
 type Config struct {
 	Admin   *AdminOpts
 	Ayum    *AyumOpts
+	AFS     *AfsOpts
 	CVMFS   *CvmfsOpts
+	LocalFS *LocalfsOpts
 	Dirs    *DirsOpts
 	EOS     *EosOpts
 	Global  *GlobalOpts
@@ -42,7 +50,7 @@ func (c *Config) String() string {
 			fmt.Sprintf("%s", c.Logging),
 		},
 		"\n",
-	)
+	) + "\n"
 }
 
 // parse parses and validates the command line,
@@ -58,6 +66,8 @@ func (c *Config) instantiate() {
 	c.Admin = &AdminOpts{}
 	c.Ayum = &AyumOpts{}
 	c.CVMFS = &CvmfsOpts{}
+	c.AFS = &AfsOpts{}
+	c.LocalFS = &LocalfsOpts{}
 	c.Dirs = &DirsOpts{}
 	c.EOS = &EosOpts{}
 	c.Global = &GlobalOpts{}
@@ -70,6 +80,8 @@ func (c *Config) flags() {
 	c.Admin.flags()
 	c.Ayum.flags()
 	c.CVMFS.flags()
+	c.AFS.flags()
+	c.LocalFS.flags()
 	c.Dirs.flags()
 	c.EOS.flags()
 	c.Global.flags()
@@ -80,11 +92,12 @@ func (c *Config) flags() {
 // postConfig adapts some variables that depend on others
 func (c *Config) postConfig() error {
 	if c.Dirs.InstallBase == "" {
-		// Nothing was given, so we define the base install dir
+		// Nothing was given, so we define the base install dir on CVMFS
 		c.Dirs.InstallBase = fmt.Sprintf("/cvmfs/%s/repo/sw", c.CVMFS.NightlyRepo)
 	}
 
 	if c.Dirs.RPMSrcBase == "" {
+		// Note that Install.Release = branch/platform/datetime
 		c.Dirs.RPMSrcBase = filepath.Join(c.EOS.NightlyBaseDir, c.Install.Release)
 	}
 
@@ -138,6 +151,8 @@ func (c *Config) validate() error {
 		c.Admin.validate,
 		c.Ayum.validate,
 		c.CVMFS.validate,
+		c.AFS.validate,
+		c.LocalFS.validate,
 		c.Dirs.validate,
 		c.EOS.validate,
 		c.Global.validate,

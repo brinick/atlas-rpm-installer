@@ -15,6 +15,13 @@ type CvmfsOpts struct {
 
 func (c *CvmfsOpts) flags() {
 	flag.StringVar(
+		&c.SudoUser,
+		"cvmfs.sudo-user",
+		"cvatlasnightlies",
+		"The sudo user, if any, required to install nightlies on CVMFS",
+	)
+
+	flag.StringVar(
 		&c.Binary,
 		"cvmfs.exe",
 		"/usr/bin/cvmfs_server",
@@ -29,22 +36,22 @@ func (c *CvmfsOpts) flags() {
 	)
 
 	flag.StringVar(
-		&c.GatewayNode,
-		"cvmfs.gateway",
+		&c.ReleaseManager,
+		"cvmfs.release-manager",
 		"lxcvmfs78.cern.ch",
-		"Gateway node for CVMFS operations",
+		"Release manager node to use for CVMFS operations",
 	)
 
 	flag.IntVar(
 		&c.MaxTransactionAttempts,
 		"cvmfs.max-transaction-attempts",
 		10,
-		"Maximum number of attempts to be made to open a transaction, before aborting",
+		"Max number of attempts to be made to open a transaction, before aborting",
 	)
 }
 
 func (c *CvmfsOpts) validate() error {
-	var min, max = 1, 30
+	var min, max = 1, 10
 	if c.MaxTransactionAttempts < min || c.MaxTransactionAttempts > max {
 		return fmt.Errorf(
 			"Max attempts to open a CVMFS transaction must be in range %d-%d",
@@ -59,8 +66,9 @@ func (c *CvmfsOpts) String() string {
 	return strings.Join(
 		[]string{
 			"- CVMFS Options:",
+			fmt.Sprintf("   - Sudo User: %s", c.SudoUser),
 			fmt.Sprintf("   - Binary: %s", c.Binary),
-			fmt.Sprintf("   - Gateway Node: %s", c.GatewayNode),
+			fmt.Sprintf("   - Gateway Node: %s", c.ReleaseManager),
 			fmt.Sprintf("   - Nightly Repo: %s", c.NightlyRepo),
 			fmt.Sprintf("   - Max Open Transaction Attempts: %d", c.MaxTransactionAttempts),
 		},

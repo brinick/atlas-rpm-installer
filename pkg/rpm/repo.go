@@ -83,7 +83,7 @@ func (f *Finder) Find(project, platform string) (*RPMs, error) {
 	}
 	topRPM, err := New(path)
 	if topRPM.Size == 0 {
-		return nil, fmt.Errorf("Top RPM has zero size: %s", path)
+		return nil, fmt.Errorf("%s: RPM has zero size", path)
 	}
 
 	deps, err := topRPM.LocalDependencies()
@@ -92,12 +92,13 @@ func (f *Finder) Find(project, platform string) (*RPMs, error) {
 	}
 
 	// Ensure that no dependencies have zero size, else fail
-	zero := deps.ZeroSize()
-	if len(zero) > 0 {
+	emptyDeps := deps.ZeroSize()
+	if len(emptyDeps) > 0 {
 		err = fmt.Errorf(
-			"rpm dependencies in %s found with zero size: %s",
+			"%d rpm dependencies in %s have zero size:\n%s",
+			len(emptyDeps),
 			path,
-			strings.Join(zero, ", "),
+			strings.Join(emptyDeps, "\n"),
 		)
 		return nil, err
 	}
@@ -167,6 +168,11 @@ type RPM struct {
 // Name returns the name of the RPM
 func (r *RPM) Name() string {
 	return filepath.Base(r.Path)
+}
+
+// NameStartsWith indicates if the RPM name has the given prefix
+func (r *RPM) NameStartsWith(prefix string) bool {
+	return strings.HasPrefix(r.Name(), prefix)
 }
 
 // LocalDependencies finds only those dependencies

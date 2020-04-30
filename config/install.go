@@ -12,7 +12,7 @@ import (
 // InstallOpts are options relating to the software to install
 type InstallOpts struct {
 	installer.Opts
-	Release string
+	Release string `json:""`
 }
 
 func (i *InstallOpts) String() string {
@@ -42,8 +42,8 @@ func (i *InstallOpts) flags() {
 func (i *InstallOpts) validate() error {
 	tokens := strings.Split(i.Release, "/")
 	if len(tokens) != 3 {
-		msg := "-r argument expected of the form:\n"
-		msg += "<branch>/<platform>/<timestamp>"
+		msg := "-release argument expected of the form:\n"
+		msg += "   <branch>/<platform>/<timestamp>\n"
 		return fmt.Errorf(msg)
 	}
 
@@ -56,19 +56,31 @@ func (i *InstallOpts) validate() error {
 		return err
 	}
 
+	project := strings.TrimSpace(i.Project)
+	if len(project) == 0 {
+		msg := "Please provide a -project option\n"
+		return fmt.Errorf(msg)
+	}
+
+	// 5 is a fairly safe bet. Ideally we'd get a list of valid projects.
+	if len(project) < 5 {
+		msg := "Illegal -project argument given ('%s')\n"
+		return fmt.Errorf(fmt.Sprintf(msg, project))
+	}
+
 	return nil
 }
 
 func (i *InstallOpts) validatePlatform() error {
 	toks := strings.Split(i.Platform, "-")
 	if len(toks) != 4 {
-		return fmt.Errorf("Badly formed platform '%s'", i.Platform)
+		return fmt.Errorf(fmt.Sprintf("Badly formed platform '%s'\n", i.Platform))
 	}
 
 	// helper function
 	validate := func(needle string, haystack []string) error {
 		if !contains(needle, haystack) {
-			msg := "Platform contains illegal component %s. Legal: %s"
+			msg := "Platform contains illegal component %s. Legal: %s\n"
 			return fmt.Errorf(msg, needle, strings.Join(haystack, ", "))
 		}
 
@@ -97,12 +109,14 @@ func (i *InstallOpts) validatePlatform() error {
 }
 
 func (i *InstallOpts) validateTimestamp() error {
-	stamp, err := time.Parse("2006-01-02T1504", i.Timestamp)
+	loc, _ := time.LoadLocation("Local")
+	stamp, err := time.ParseInLocation("2006-01-02T1504", i.Timestamp, loc)
 	if err != nil {
 		return fmt.Errorf(
-			"Badly formed timestamp %s, error: %v",
-			i.Timestamp,
-			err,
+			fmt.Sprintf("Badly formed timestamp %s, error: %v\n",
+				i.Timestamp,
+				err,
+			),
 		)
 	}
 

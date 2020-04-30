@@ -25,28 +25,29 @@ func (d *DirsOpts) flags() {
 		&d.InstallBase,
 		"dirs.install",
 		"",
-		"Base directory below which to install",
+		"Base directory below which to install (default is /cvmfs/<cvmfsNightlyRepo>/repo/sw)",
 	)
 
 	flag.StringVar(
 		&d.Logs,
 		"dirs.logs",
 		filepath.Join(os.Getenv("HOME"), "logs"),
-		"Directory in which to create install logs (default: $HOME/logs/)",
+		"Directory in which to create install logs",
 	)
 
 	flag.StringVar(
 		&d.WorkBase,
 		"dirs.work",
 		os.Getenv("HOME"),
-		"Directory in which to do work (default: $HOME)",
+		"Directory in which to do work",
 	)
 
 	flag.StringVar(
 		&d.RPMSrcBase,
 		"dirs.rpmsrc",
 		"",
-		"Directory in which to find source RPMs",
+		"Directory in which to find source RPMs "+
+			"(default is value of -eos.nightly-basedir + <releaseToInstall>)",
 	)
 
 	flag.StringVar(

@@ -1,75 +1,83 @@
-package tagsfile
+package tagsfile_test
 
 import (
-	"strings"
+	"fmt"
+	"io/ioutil"
+	"os"
 	"testing"
+
+	"github.com/brinick/atlas-rpm-installer/pkg/tagsfile"
 )
 
-func TestEntryContains(t *testing.T) {
-	e := Entry{
-		Label:    "VO-atlas-nightly",
-		Branch:   "21.3",
-		Datetime: "2019-10-27T0347",
-		Project:  "AnalysisBase",
-		NextRel:  "21.3.16",
-		Platform: "x86_64-centos7-gcc8-opt",
+func tempDir() string {
+	dir, err := ioutil.TempDir("", "atlas_rpm_installer_tagsfile")
+	if err != nil {
+		panic(
+			fmt.Sprintf(
+				"unable to make a temporary directory: %v",
+				err,
+			),
+		)
 	}
 
-	var entryTests = []struct {
-		name   string
-		search []string
-		expect bool
-	}{
-		{name: "empty list", expect: false},
-		{name: "single item empty string", search: []string{""}, expect: true},
-		{name: "single item matching within word", search: []string{"centos"}, expect: true},
-		{name: "single item matching exact word", search: []string{"21.3.16"}, expect: true},
-		{name: "single item matching across fields", search: []string{"nightly;21.3"}, expect: true},
-		{name: "single item not matching", search: []string{"Missing"}, expect: false},
-		{name: "first item ok, next not matching", search: []string{"", "Missing"}, expect: true},
-		{name: "first item not matching next ok", search: []string{"Missing", ""}, expect: true},
-		{name: "only items not matching", search: []string{"Missing", "Missing2"}, expect: false},
-	}
-
-	for _, tt := range entryTests {
-		t.Run(tt.name, func(t *testing.T) {
-			if e.contains(tt.search) != tt.expect {
-				t.Errorf(
-					"%s should return %t, got %t",
-					tt.name,
-					tt.expect,
-					!tt.expect,
-				)
-			}
-		})
-	}
+	return dir
 }
 
-func TestCreateBadEntry(t *testing.T) {
-	tf := TagsFile{}
-	_, err := tf.createEntry("bad-line")
-	if err == nil {
-		t.Errorf("badly formatted entry line should provoke error, got nil")
+func tempFile() *os.File {
+	d := tempDir()
+	f, err := ioutil.TempFile(d, "temp")
+	if err != nil {
+		panic(err)
+	}
+	return f
+}
+
+func TestRemoveEntry(t *testing.T) {
+	f := tempFile()
+	defer os.Remove(f.Name())
+	f.Close()
+
+	d := tempDir()
+	defer os.RemoveAll(d)
+
+	tf := tagsfile.New(f.Name(), d)
+
+	if err := tf.Remove("this should provoke an error"); err == nil {
+		t.Errorf("removing an element on an empty tagsfile should return an error, but did not")
 	}
 
-	msg := err.Error()
-	if !strings.HasPrefix(msg, "badly formatted") {
-		t.Errorf("badly formatted entry line should provoke bad format error, got %s", msg)
-
+	var entries tagsfile.Entries
+	entries.Add(&tagsfile.Entry{Label: "be the change"})
+	entries.Add(&tagsfile.Entry{Label: "you wish to see in the world"})
+	if err := tf.Append(&entries); err != nil {
+		t.Fatal(err)
 	}
 
-	line := strings.Join(
-		[]string{
-			"VO-atlas-nightly",
-			"21.3",
-			"2019-10-27T0347",
-			"AnalysisBase-21.3.16",
-			"x86_64-centos7-gcc8-opt",
-		},
-		";",
-	)
-	_, err = tf.createEntry(line)
-	if !strings.HasPrefix(err.Error(), "badly formatted field") {
-		t.Errorf("Error is %s", err.Error())
+	if tf.Size() != 2 {
+		t.Errorf("incorrect tagsfile size, expected 2, got %d", tf.Size())
+	}
+
+	if err := tf.Remove("change"); err != nil {
+		t.Errorf("unable to remove entry from tags file, got error: %v", err)
+	}
+
+	if tf.Size() != 1 {
+		t.Errorf("incorrect tagsfile size, expected 1, got %d", tf.Size())
+	}
+
+	if err := tf.Remove("this"); err != nil {
+		t.Errorf("unable to remove entry from tags file, got error: %v", err)
+	}
+
+	if tf.Size() != 1 {
+		t.Errorf("incorrect tagsfile size, expected 1, got %d", tf.Size())
+	}
+
+	if err := tf.Remove("to see"); err != nil {
+		t.Errorf("unable to remove entry from tags file, got error: %v", err)
+	}
+
+	if tf.Size() != 0 {
+		t.Errorf("incorrect tagsfile size, expected 0, got %d", tf.Size())
 	}
 }

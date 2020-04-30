@@ -2,6 +2,7 @@ package metric
 
 import (
 	"fmt"
+	"strings"
 )
 
 // API provides the set of methods for gathering metrics
@@ -13,6 +14,8 @@ type API interface {
 
 // NewQueue returns a new metric queue
 func NewQueue(itemFormatter string, cap int) *Queue {
+	itemFormatter = strings.TrimSpace(itemFormatter)
+
 	if cap <= 0 {
 		cap = 1
 	} else if cap >= 100 {
@@ -20,6 +23,8 @@ func NewQueue(itemFormatter string, cap int) *Queue {
 	}
 
 	switch itemFormatter {
+	case "":
+		return nil
 	case "statsd":
 		return &Queue{
 			formatter: &StatsD{},

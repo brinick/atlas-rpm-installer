@@ -14,22 +14,22 @@ type lister interface {
 }
 
 type cmdList struct {
-	log    logging.Logger
-	runner ayumCmdRunner
+	log logging.Logger
+	cmd *ayumCommand
 }
 
 // Installed returns the list of locally installed packages.
 // If none are found, an empty slice is returned. If an error occurs,
 // the package list is nil.
 func (c *cmdList) Installed(ctx context.Context) (*localPackages, error) {
-	var err error
-	if err = c.runner.Run(shell.Context(ctx)); err == nil {
-		packages := c.parseInstalled(c.runner.Result().Stdout().Text())
+	c.cmd.Run(shell.Context(ctx))
+	if c.cmd.Result().Err() == nil {
+		packages := c.parseInstalled(c.cmd.Result().Stdout().Text())
 		return packages, nil
 	}
 
-	stdout := c.runner.Result().Stdout()
-	stderr := c.runner.Result().Stderr()
+	stdout := c.cmd.Result().Stdout()
+	stderr := c.cmd.Result().Stderr()
 
 	if stdout.Text() == stderr.Text() {
 		c.log.Info("No locally installed packages")
@@ -38,14 +38,14 @@ func (c *cmdList) Installed(ctx context.Context) (*localPackages, error) {
 
 	c.log.Error(
 		"Unable to retrieve locally installed package list",
-		logging.F("err", c.runner.Result().Error()),
+		logging.F("err", c.cmd.Result().Err()),
 	)
 
-	for _, line := range stderr.Lines() {
-		c.log.Error(line)
+	for _, line := range stdout.Lines() {
+		c.log.Info(line)
 	}
 
-	for _, line := range stdout.Lines() {
+	for _, line := range stderr.Lines() {
 		c.log.Error(line)
 	}
 

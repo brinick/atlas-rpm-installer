@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // Transactioner defines the interface for file system transactions
@@ -49,10 +50,6 @@ func (t *Transaction) Open(ctx context.Context) error {
 		return nil
 	}
 
-	go func() {
-		// abort if necessary
-	}()
-
 	var (
 		err      error
 		attempts = t.Attempts()
@@ -73,6 +70,14 @@ func (t *Transaction) Open(ctx context.Context) error {
 		}
 
 		attempts--
+
+		// TODO: communicate the attempts?
+		// Wait 10 seconds (interruptible) between transaction attempts
+		select {
+		case <-time.After(time.Second * time.Duration(10)):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 
 	return err

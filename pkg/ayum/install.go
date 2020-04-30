@@ -16,8 +16,8 @@ type installer interface {
 
 type cmdInstall struct {
 	lister
-	rpmInstaller   ayumCmdRunner
-	rpmReinstaller ayumCmdRunner
+	rpmInstaller   *ayumCommand
+	rpmReinstaller *ayumCommand
 	log            logging.Logger
 }
 
@@ -73,19 +73,17 @@ func (c *cmdInstall) reinstallRPMs(ctx context.Context, rpms ...string) error {
 	return c.doInstall(ctx, c.rpmReinstaller, rpms)
 }
 
-func (c *cmdInstall) doInstall(ctx context.Context, runner ayumCmdRunner, rpms []string) error {
+func (c *cmdInstall) doInstall(ctx context.Context, runner *ayumCommand, rpms []string) error {
 	if len(rpms) == 0 {
 		return nil
 	}
 
 	// Format and set the ayum install command with the rpms
-	fullCmd := fmt.Sprintf(runner.Command(), strings.Join(rpms, " "))
-	runner.SetCommand(fullCmd)
-
-	err := runner.Run(shell.Context(ctx))
+	runner.cmd = fmt.Sprintf(runner.cmd, strings.Join(rpms, " "))
+	runner.Run(shell.Context(ctx))
 
 	// TODO: error check and log messages
-	return err
+	return runner.Result().Err()
 }
 
 // removeFileExt is a helper function to remove the file extension from a list of file names
