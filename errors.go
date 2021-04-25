@@ -142,13 +142,13 @@ func (t TransactionAbortError) Error() string {
 
 // ---------------------------------------------------------------------
 
-// AyumCopyLogError represents an error during the copying of the ayum log
-type AyumCopyLogError struct {
+// PkgManagerCopyLogError represents an error during the copying of the package manager log
+type PkgManagerCopyLogError struct {
 	msg string
 }
 
-func (a AyumCopyLogError) Error() string {
-	return a.msg
+func (p PkgManagerCopyLogError) Error() string {
+	return p.msg
 }
 
 // ---------------------------------------------------------------------

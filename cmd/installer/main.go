@@ -17,7 +17,7 @@ import (
 	installer "github.com/brinick/atlas-rpm-installer"
 	"github.com/brinick/atlas-rpm-installer/config"
 
-	"github.com/brinick/atlas-rpm-installer/pkg/ayum"
+	"github.com/brinick/atlas-rpm-installer/pkg/pkginstaller"
 	"github.com/brinick/atlas-rpm-installer/pkg/filesystem"
 	"github.com/brinick/atlas-rpm-installer/pkg/filesystem/afs"
 	"github.com/brinick/atlas-rpm-installer/pkg/filesystem/cvmfs"
@@ -25,8 +25,6 @@ import (
 	"github.com/brinick/atlas-rpm-installer/pkg/notify"
 	"github.com/brinick/atlas-rpm-installer/pkg/rpm"
 	"github.com/brinick/atlas-rpm-installer/pkg/tagsfile"
-
-	"github.com/brinick/logging"
 )
 
 var (
@@ -49,8 +47,12 @@ var (
 )
 
 func main() {
-	var log logging.Logger
+	var (
+		log           logging.Logger
+		pkgManagerLog logging.Logger
+	)
 
+	// TODO: should this be a statsd timer?
 	// Time the execution of this main function i.e. of the whole install process
 	defer func(start time.Time) {
 		d := time.Since(start)
@@ -66,53 +68,10 @@ func main() {
 	signalChan := trap()
 	defer close(signalChan)
 
-	// Init the app and ayum loggers
-	var outfile = strings.TrimSpace(cfg.Logging.OutFile)
-
-	// Replace special text markers, if they exist, with their corresponding values
-	outfile = strings.ReplaceAll(outfile, "%branch", cfg.Install.Branch)
-	outfile = strings.ReplaceAll(outfile, "%platform", cfg.Install.Platform)
-	outfile = strings.ReplaceAll(outfile, "%project", cfg.Install.Project)
-	outfile = strings.ReplaceAll(outfile, "%timestamp", cfg.Install.Timestamp)
-	outfile = strings.ReplaceAll(outfile, "%start", fmt.Sprintf("%d", startEpoch))
-
-	// Now, make it into an absolute path
-	outfilePath := ""
-	ayumOutFilePath := ""
-	if len(outfile) > 0 {
-		outfilePath = filepath.Join(cfg.Dirs.Logs, outfile+".log")
-		ayumOutFilePath = filepath.Join(cfg.Dirs.Logs, outfile+".ayum.log")
-	}
-
-	// The main install log
-	log, err := logging.NewClient(
-		cfg.Logging.Client,
-		&logging.Config{
-			LogLevel:  cfg.Logging.Level,
-			OutFormat: cfg.Logging.Format,
-			Outfile:   outfilePath,
-		},
-	)
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] unable to configure logging (%v)\n", err)
-		os.Exit(ExitCode.ParserError)
-	}
-
-	// The ayum-specific log
-	ayumlog, err := logging.NewClient(
-		cfg.Logging.Client,
-		&logging.Config{
-			LogLevel:  cfg.Logging.Level,
-			OutFormat: cfg.Logging.Format,
-			Outfile:   ayumOutFilePath,
-		},
-	)
-
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "[ERROR] unable to configure ayum logging (%v)\n", err)
-		os.Exit(ExitCode.ParserError)
-	}
+	// Create the main and the package manager loggers
+	logname := makeLogName(cfg.Logging.OutFile, cfg.Install, startEpoch)
+	log = createLogger(filepath.Join(cfg.Dirs.Logs, logname+".log"), cfg.Logging)
+	pkgManagerLog = createLogger(filepath.Join(cfg.Dirs.Logs, logname+"ayum.log"), cfg.Logging)
 
 	log.Debug(fmt.Sprintf("\n--- Configuration Dump ---\n\n%s\n", cfg.String()))
 
@@ -137,6 +96,7 @@ func main() {
 		fsTransactioner,
 
 		// ayum handler
+		pkginstaller.select()
 		ayum.New(&cfg.Ayum.Opts, ayumlog),
 
 		// rpm/dependency finder

@@ -9,6 +9,37 @@ import (
 	installer "github.com/brinick/atlas-rpm-installer"
 )
 
+// Add to this as required...
+var legalPlatforms = platforms{
+	binary:   []string{"x86_64"},
+	os:       []string{"slc6", "centos7"},
+	compiler: []string{"gcc49", "gcc62", "gcc8", "clang10"},
+	build:    []string{"opt", "dbg"},
+}
+
+// ----------------------------------------------------------------------
+
+type platforms struct {
+	binary   []string
+	os       []string
+	compiler []string
+	build    []string
+}
+
+func (p *platforms) isValid(platform string) bool {
+	toks := strings.Split(platform, "-")
+	if len(toks) != 4 {
+		return false
+	}
+
+	return contains(toks[0], p.binary) &&
+		contains(toks[1], p.os) &&
+		contains(toks[2], p.compiler) &&
+		contains(toks[3], p.build)
+}
+
+// ----------------------------------------------------------------------
+
 // InstallOpts are options relating to the software to install
 type InstallOpts struct {
 	installer.Opts
@@ -48,8 +79,9 @@ func (i *InstallOpts) validate() error {
 	}
 
 	i.Branch, i.Platform, i.Timestamp = tokens[0], tokens[1], tokens[2]
-	if err := i.validatePlatform(); err != nil {
-		return err
+
+	if !legalPlatforms.isValid(i.Platform) {
+		return fmt.Errorf("%s: illegal platform", i.Platform)
 	}
 
 	if err := i.validateTimestamp(); err != nil {
@@ -66,43 +98,6 @@ func (i *InstallOpts) validate() error {
 	if len(project) < 5 {
 		msg := "Illegal -project argument given ('%s')\n"
 		return fmt.Errorf(fmt.Sprintf(msg, project))
-	}
-
-	return nil
-}
-
-func (i *InstallOpts) validatePlatform() error {
-	toks := strings.Split(i.Platform, "-")
-	if len(toks) != 4 {
-		return fmt.Errorf(fmt.Sprintf("Badly formed platform '%s'\n", i.Platform))
-	}
-
-	// helper function
-	validate := func(needle string, haystack []string) error {
-		if !contains(needle, haystack) {
-			msg := "Platform contains illegal component %s. Legal: %s\n"
-			return fmt.Errorf(msg, needle, strings.Join(haystack, ", "))
-		}
-
-		return nil
-	}
-
-	binary, os, compiler, build := toks[0], toks[1], toks[2], toks[3]
-
-	items := []struct {
-		value string
-		legal []string
-	}{
-		{binary, []string{"x86_64"}},
-		{os, []string{"slc6", "centos7"}},
-		{compiler, []string{"gcc49", "gcc62", "gcc8"}},
-		{build, []string{"opt", "dbg"}},
-	}
-
-	for _, item := range items {
-		if err := validate(item.value, item.legal); err != nil {
-			return err
-		}
 	}
 
 	return nil

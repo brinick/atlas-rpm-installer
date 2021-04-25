@@ -21,7 +21,7 @@ func SetFieldSeparator(s string) {
 	}
 }
 
-// New creates a new tags file instance based on src.
+// New creates a new tags file instance based on the existing src tagsfile.
 // If editing of the file is requested (writing to, deleting entries),
 // the src is first copied to the given bckupDir directory, and the edits
 // are made on the copy. It is up to the client to request a Write

@@ -164,6 +164,11 @@ type Ayum struct {
 	log logging.Logger
 }
 
+// Name returns the name of the ayum executable
+func (a *Ayum) Name() string {
+	return "ayum"
+}
+
 // Log retrieves the logging instance to which ayum output is sent
 func (a *Ayum) Log() logging.Logger {
 	return a.log

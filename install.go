@@ -41,7 +41,8 @@ type rpmRepoAdder interface {
 	AddRemoteRepos([]*rpm.Repo) error
 }
 
-type ayumer interface {
+type pkgManager interface {
+	Name() string
 	downloader
 	configurer
 	rpmRepoAdder
@@ -107,7 +108,7 @@ func (o *Opts) String() string {
 func New(
 	opts *Opts,
 	t filesystem.Transactioner,
-	ay ayumer,
+	pkg pkgManager,
 	finder rpmFinder,
 	tags tagsFiler,
 	log logging.Logger,
@@ -116,7 +117,7 @@ func New(
 		opts:        opts,
 		log:         log,
 		transaction: t,
-		ayum:        ay,
+		pkg:         pkg,
 		rpms:        finder,
 		tags:        tags,
 		doneChan:    make(chan struct{}),
@@ -150,7 +151,7 @@ func (e *Errors) String() string {
 type Installer struct {
 	opts        *Opts
 	transaction filesystem.Transactioner
-	ayum        ayumer
+	pkg         pkgManager
 	rpms        rpmFinder
 	log         logging.Logger
 	tags        tagsFiler
@@ -190,16 +191,16 @@ func (inst *Installer) Execute(ctx context.Context) {
 		inst.setDone()
 	}()
 
-	// stop on error
+	// Open the file transaction
 	if err := inst.openTransaction(ctx); err != nil {
 		inst.err.Append(NewTransactionOpenError(err))
 		inst.aborted = true
 		return
 	}
 
+	// Ensure we close the transaction whatever happens
 	defer func() {
-		inst.err.Append(inst.copyAyumLog())
-
+		inst.err.Append(inst.copyPkgManagerLog())
 		inst.endTransaction(ctx)
 	}()
 
@@ -227,7 +228,7 @@ func (inst *Installer) endTransaction(ctx context.Context) {
 
 	// Should we end by abort, or by normal close?
 	shouldAbort := inst.IsError() &&
-		!(len(*inst.err) == 1 && errors.Is((*inst.err)[0], AyumCopyLogError{}))
+		!(len(*inst.err) == 1 && errors.Is((*inst.err)[0], PkgManagerCopyLogError{}))
 
 	switch shouldAbort {
 	case true:
@@ -239,7 +240,6 @@ func (inst *Installer) endTransaction(ctx context.Context) {
 			inst.err.Append(NewTransactionCloseError(err))
 		}
 	}
-
 }
 
 // NightlyID returns a string that identifies this given nightly branch
@@ -262,21 +262,22 @@ func (inst *Installer) NightlyInstallDir() string {
 	)
 }
 
-func (inst *Installer) copyAyumLog() error {
-	ayumLog := inst.ayum.Log().Path()
+func (inst *Installer) copyPkgManagerLog() error {
+	pkgLog := inst.pkg.Log().Path()
 	tgtDir := inst.NightlyInstallDir()
 
 	if err := os.MkdirAll(tgtDir, 0755); err != nil {
-		return AyumCopyLogError{
+		return PkgManagerCopyLogError{
 			msg: fmt.Sprintf("cannot create directory %s (%v)", tgtDir, err),
 		}
 	}
 
-	if err := fs.CopyFile(ayumLog, tgtDir); err != nil {
-		return AyumCopyLogError{
+	if err := fs.CopyFile(pkgLog, tgtDir); err != nil {
+		return PkgManagerCopyLogError{
 			msg: fmt.Sprintf(
-				"cannot copy ayum log (%s) to directory %s (%v)",
-				ayumLog,
+				"cannot copy %s log (%s) to directory %s (%v)",
+				inst.pkg.Name(),
+				pkgLog,
 				tgtDir,
 				err,
 			),
@@ -342,7 +343,7 @@ func (inst *Installer) doInstall(ctx context.Context) error {
 		return err
 	}
 
-	// 2. Download and configure ayum
+	// 2. Download and configure the package manager
 	if err = inst.configure(ctx); err != nil {
 		return err
 	}
@@ -350,7 +351,7 @@ func (inst *Installer) doInstall(ctx context.Context) error {
 	// TODO: check that the number of RPMs in EOS nightly dir matches the number
 	// installed in our install directory
 
-	// 3. Use ayum to (re)install the RPMs
+	// 3. Use the pkg manager to (re)install the RPMs
 	var installErr = NewInstallError()
 	for _, rpms := range rpmsList {
 		installErr.add(inst.installRPMs(ctx, rpms))
@@ -407,7 +408,7 @@ func (inst *Installer) getRPMs(ctx context.Context) ([]*rpm.RPMs, error) {
 
 // installRPMs installs a given set of RPMs
 func (inst *Installer) installRPMs(ctx context.Context, rpms *rpm.RPMs) error {
-	if err := inst.ayum.Install(ctx, rpms.Names()...); err != nil {
+	if err := inst.pkg.Install(ctx, rpms.Names()...); err != nil {
 		return err
 	}
 
@@ -416,7 +417,7 @@ func (inst *Installer) installRPMs(ctx context.Context, rpms *rpm.RPMs) error {
 	}
 
 	// TODO: configure this name
-	if err := inst.ayum.CleanAll(ctx, "atlas-offline-nightly"); err != nil {
+	if err := inst.pkg.CleanAll(ctx, "atlas-offline-nightly"); err != nil {
 		return err
 	}
 
@@ -507,27 +508,27 @@ func (inst *Installer) cleanDirs(ctx context.Context) error {
 }
 
 // configure readies the installer for installing RPMs,
-// by downloading ayum and configuring it.
+// by downloading the package manager and configuring it.
 func (inst *Installer) configure(ctx context.Context) error {
 	var err error
-	if err = inst.ayum.Download(ctx); err != nil {
+	if err = inst.pkg.Download(ctx); err != nil {
 		return err
 	}
 
-	if err = inst.ayum.PreConfigure(inst.opts.StableReleasesDir); err != nil {
+	if err = inst.pkg.PreConfigure(inst.opts.StableReleasesDir); err != nil {
 		return err
 	}
 
-	if err = inst.ayum.AddRemoteRepos(inst.getRemoteRepos()); err != nil {
+	if err = inst.pkg.AddRemoteRepos(inst.getRemoteRepos()); err != nil {
 		return err
 	}
 
-	if err = inst.ayum.Configure(ctx); err != nil {
+	if err = inst.pkg.Configure(ctx); err != nil {
 		return err
 	}
 
 	// TODO: configure the name of this repo
-	if err = inst.ayum.CleanAll(ctx, "atlas-offline-nightly"); err != nil {
+	if err = inst.pkg.CleanAll(ctx, "atlas-offline-nightly"); err != nil {
 		return err
 	}
 
